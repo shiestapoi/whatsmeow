@@ -527,7 +527,7 @@ func upgradeV7(tx *sql.Tx, container *Container) error {
 			if err != nil {
 				return fmt.Errorf("failed to disable foreign key checks: %w", err)
 			}
-			
+
 			// Set database default character set
 			_, err = tx.Exec("SET NAMES utf8mb4")
 			if err != nil {
@@ -535,22 +535,22 @@ func upgradeV7(tx *sql.Tx, container *Container) error {
 				_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
 				return fmt.Errorf("failed to set default character set: %w", err)
 			}
-			
+
 			// List tables to update
 			tables := []string{
-				"whatsmeow_contacts", 
+				"whatsmeow_contacts",
 				"whatsmeow_device",
 				"whatsmeow_chat_settings",
 				"whatsmeow_message_secrets",
 				"whatsmeow_app_state_sync_keys",
-				"whatsmeow_app_state_version", 
+				"whatsmeow_app_state_version",
 				"whatsmeow_identity_keys",
 				"whatsmeow_pre_keys",
 				"whatsmeow_sessions",
 				"whatsmeow_sender_keys",
 				"whatsmeow_privacy_tokens",
 			}
-			
+
 			// For each table, modify character set using standard ALTER TABLE syntax
 			for _, table := range tables {
 				// Use the more compatible ALTER TABLE syntax
@@ -561,7 +561,7 @@ func upgradeV7(tx *sql.Tx, container *Container) error {
 					return fmt.Errorf("failed to convert %s table to utf8mb4: %w", table, err)
 				}
 			}
-			
+
 			// Define text columns that need explicit conversion - use safe ALTER TABLE statements
 			textColumns := map[string][]string{
 				"whatsmeow_contacts": {
@@ -571,12 +571,12 @@ func upgradeV7(tx *sql.Tx, container *Container) error {
 					"platform", "business_name", "push_name",
 				},
 			}
-			
+
 			// Update text columns to utf8mb4
 			for table, columns := range textColumns {
 				for _, column := range columns {
 					// Execute separate statements for each column to ensure compatibility
-					_, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s MODIFY %s TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", 
+					_, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s MODIFY %s TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
 						table, column))
 					if err != nil {
 						// Re-enable foreign key checks before returning
@@ -585,7 +585,7 @@ func upgradeV7(tx *sql.Tx, container *Container) error {
 					}
 				}
 			}
-			
+
 			// Re-enable foreign key checks
 			_, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
 			if err != nil {

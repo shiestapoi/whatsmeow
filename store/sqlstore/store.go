@@ -156,13 +156,13 @@ func (s *SQLStore) PutIdentity(address string, key [32]byte) error {
 	var query string
 	if s.dialect == "mysql" {
 		query = `
-		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) 
+		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity)
 		VALUES (?, ?, ?)
 		ON DUPLICATE KEY UPDATE identity=VALUES(identity)
 		`
 	} else if s.dialect == "sqlite3" {
 		query = `
-		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) 
+		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity)
 		VALUES (?, ?, ?)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity
 		`
@@ -236,7 +236,7 @@ func (s *SQLStore) PutSession(address string, session []byte) error {
 	} else if s.dialect == "sqlite3" {
 		query = `
 		INSERT INTO whatsmeow_sessions (our_jid, their_id, session)
-		VALUES (?, ?, ?) 
+		VALUES (?, ?, ?)
 		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
 		`
 	} else {
@@ -430,9 +430,9 @@ func (s *SQLStore) PutAppStateSyncKey(id []byte, key store.AppStateSyncKey) erro
 			_, err = tx.Exec(`
 					INSERT INTO whatsmeow_app_state_sync_keys (jid, key_id, key_data, timestamp, fingerprint)
 					VALUES (?, ?, ?, ?, ?)
-					ON DUPLICATE KEY UPDATE 
-						key_data=VALUES(key_data), 
-						timestamp=VALUES(timestamp), 
+					ON DUPLICATE KEY UPDATE
+						key_data=VALUES(key_data),
+						timestamp=VALUES(timestamp),
 						fingerprint=VALUES(fingerprint)
 				`, s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
 
@@ -914,7 +914,7 @@ func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err e
 	// Use the correct query based on dialect
 	var query string
 	if s.dialect == "mysql" {
-		query = `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `) 
+		query = `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `)
 				VALUES (?, ?, ?, ?, ?)
 				ON DUPLICATE KEY UPDATE our_jid=our_jid`
 	} else {
@@ -939,7 +939,7 @@ func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err e
 func (s *SQLStore) PutMessageSecret(chat, sender types.JID, id types.MessageID, secret []byte) (err error) {
 	// For MySQL we need explicit backticks around the "key" column
 	if s.dialect == "mysql" {
-		query := `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `) 
+		query := `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `)
 				 VALUES (?, ?, ?, ?, ?)
 				 ON DUPLICATE KEY UPDATE our_jid=our_jid`
 		_, err = s.db.Exec(query, s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
