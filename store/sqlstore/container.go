@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	mathRand "math/rand"
-	"strings"
 
 	"github.com/google/uuid"
 	"go.mau.fi/util/random"
@@ -239,41 +238,78 @@ func (c *Container) PutDevice(device *store.Device) error {
 		return ErrDeviceIDMustBeSet
 	}
 
-	insertStmt := insertDeviceQuery
+	var query string
+	var args []interface{}
 
-	// Replace all $N placeholders with ? for MySQL and SQLite
-	if c.dialect == "sqlite" || c.dialect == "mysql" {
-		insertStmt = strings.ReplaceAll(insertStmt, "$1", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$2", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$3", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$4", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$5", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$6", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$7", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$8", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$9", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$10", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$11", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$12", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$13", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$14", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$15", "?")
-		insertStmt = strings.ReplaceAll(insertStmt, "$16", "?")
-
-		// For MySQL, change ON CONFLICT syntax to MySQL's equivalent
-		if c.dialect == "mysql" {
-			insertStmt = strings.Replace(insertStmt,
-				"ON CONFLICT (jid) DO UPDATE SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name",
-				"ON DUPLICATE KEY UPDATE platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name)",
-				1)
-		}
+	// Define the query based on dialect
+	if c.dialect == "mysql" {
+		query = `
+		INSERT INTO whatsmeow_device (jid, registration_id, noise_key, identity_key,
+									  signed_pre_key, signed_pre_key_id, signed_pre_key_sig,
+									  adv_key, adv_details, adv_account_sig, adv_account_sig_key, adv_device_sig,
+									  platform, business_name, push_name, facebook_uuid)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE 
+		    platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name)
+		`
+	} else if c.dialect == "sqlite" {
+		query = `
+		INSERT INTO whatsmeow_device (jid, registration_id, noise_key, identity_key,
+									  signed_pre_key, signed_pre_key_id, signed_pre_key_sig,
+									  adv_key, adv_details, adv_account_sig, adv_account_sig_key, adv_device_sig,
+									  platform, business_name, push_name, facebook_uuid)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (jid) DO UPDATE
+		    SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name
+		`
+	} else {
+		// PostgreSQL
+		query = `
+		INSERT INTO whatsmeow_device (jid, registration_id, noise_key, identity_key,
+									  signed_pre_key, signed_pre_key_id, signed_pre_key_sig,
+									  adv_key, adv_details, adv_account_sig, adv_account_sig_key, adv_device_sig,
+									  platform, business_name, push_name, facebook_uuid)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		ON CONFLICT (jid) DO UPDATE
+		    SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name
+		`
 	}
 
-	_, err := c.db.Exec(insertStmt,
-		device.ID.String(), device.RegistrationID, device.NoiseKey.Priv[:], device.IdentityKey.Priv[:],
-		device.SignedPreKey.Priv[:], device.SignedPreKey.KeyID, device.SignedPreKey.Signature[:],
-		device.AdvSecretKey, device.Account.Details, device.Account.AccountSignature, device.Account.AccountSignatureKey, device.Account.DeviceSignature,
-		device.Platform, device.BusinessName, device.PushName, uuid.NullUUID{UUID: device.FacebookUUID, Valid: device.FacebookUUID != uuid.Nil})
+	// Define the appropriate facebook_uuid value based on dialect
+	var fbUUIDValue interface{}
+	if c.dialect == "mysql" {
+		// For MySQL, store UUID as string
+		if device.FacebookUUID != uuid.Nil {
+			fbUUIDValue = device.FacebookUUID.String()
+		} else {
+			fbUUIDValue = nil
+		}
+	} else {
+		// For other databases, use the UUID type
+		fbUUIDValue = uuid.NullUUID{UUID: device.FacebookUUID, Valid: device.FacebookUUID != uuid.Nil}
+	}
+
+	// Create the args array
+	args = []interface{}{
+		device.ID.String(),
+		device.RegistrationID,
+		device.NoiseKey.Priv[:],
+		device.IdentityKey.Priv[:],
+		device.SignedPreKey.Priv[:],
+		device.SignedPreKey.KeyID,
+		device.SignedPreKey.Signature[:],
+		device.AdvSecretKey,
+		device.Account.Details,
+		device.Account.AccountSignature,
+		device.Account.AccountSignatureKey,
+		device.Account.DeviceSignature,
+		device.Platform,
+		device.BusinessName,
+		device.PushName,
+		fbUUIDValue,
+	}
+
+	_, err := c.db.Exec(query, args...)
 
 	if !device.Initialized {
 		innerStore := NewSQLStore(c, *device.ID)

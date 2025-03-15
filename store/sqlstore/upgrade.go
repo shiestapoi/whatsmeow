@@ -18,7 +18,7 @@ type upgradeFunc func(*sql.Tx, *Container) error
 //
 // This may be of use if you want to manage the database fully manually, but in most cases you
 // should just call Container.Upgrade to let the library handle everything.
-var Upgrades = [...]upgradeFunc{upgradeV1, upgradeV2, upgradeV3, upgradeV4, upgradeV5, upgradeV6}
+var Upgrades = [...]upgradeFunc{upgradeV1, upgradeV2, upgradeV3, upgradeV4, upgradeV5, upgradeV6, upgradeV7}
 
 func (c *Container) getVersion() (int, error) {
 	_, err := c.db.Exec("CREATE TABLE IF NOT EXISTS whatsmeow_version (version INTEGER)")
@@ -240,178 +240,151 @@ func upgradeV1(tx *sql.Tx, c *Container) error {
 }
 
 func upgradeV1MySQL(tx *sql.Tx, c *Container) error {
-	// MySQL version with BLOB instead of bytea
-	
-	// Check if it's MySQL 8 or newer which has proper CHECK constraint support
-	var isMySQLv8 bool
+	// First, detect if we're using MariaDB
 	var version string
-	err := c.db.QueryRow("SELECT VERSION()").Scan(&version)
-	if err == nil && strings.HasPrefix(version, "8.") {
-		isMySQLv8 = true
-	}
-	
-	// Define constraint checks based on MySQL version
-	var checksSQL string
-	if (isMySQLv8) {
-		// MySQL 8+ supports standard CHECK syntax
-		checksSQL = `
-		CHECK (registration_id >= 0 AND registration_id < 4294967296),
-		CHECK (LENGTH(noise_key) = 32),
-		CHECK (LENGTH(identity_key) = 32),
-		CHECK (LENGTH(signed_pre_key) = 32),
-		CHECK (signed_pre_key_id >= 0 AND signed_pre_key_id < 16777216),
-		CHECK (LENGTH(signed_pre_key_sig) = 64),
-		CHECK (LENGTH(adv_account_sig) = 64),
-		CHECK (LENGTH(adv_device_sig) = 64)
-		`
-	} else {
-		// For older MySQL versions that don't support CHECK properly, we'll leave these out
-		checksSQL = ""
-	}
-	
-	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_device (
-		jid VARCHAR(255) PRIMARY KEY,
+	c.db.QueryRow("SELECT VERSION()").Scan(&version)
 
-		registration_id BIGINT NOT NULL,
-
-		noise_key    BLOB NOT NULL,
-		identity_key BLOB NOT NULL,
-
-		signed_pre_key     BLOB    NOT NULL,
-		signed_pre_key_id  INTEGER NOT NULL,
-		signed_pre_key_sig BLOB    NOT NULL,
-
-		adv_key         BLOB NOT NULL,
-		adv_details     BLOB NOT NULL,
-		adv_account_sig BLOB NOT NULL,
-		adv_device_sig  BLOB NOT NULL,
-
-		platform      TEXT NOT NULL DEFAULT '',
-		business_name TEXT NOT NULL DEFAULT '',
-		push_name     TEXT NOT NULL DEFAULT '',
-		
-		` + checksSQL + `
-	)`)
+	// Create device table - basic table without constraints
+	_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_device (
+        jid VARCHAR(255) PRIMARY KEY,
+        registration_id BIGINT NOT NULL,
+        noise_key    LONGBLOB NOT NULL,
+        identity_key LONGBLOB NOT NULL,
+        signed_pre_key     LONGBLOB NOT NULL,
+        signed_pre_key_id  INTEGER NOT NULL,
+        signed_pre_key_sig LONGBLOB NOT NULL,
+        adv_key         LONGBLOB NOT NULL,
+        adv_details     LONGBLOB NOT NULL,
+        adv_account_sig LONGBLOB NOT NULL,
+        adv_device_sig  LONGBLOB NOT NULL,
+        platform      TEXT NOT NULL,
+        business_name TEXT NOT NULL,
+        push_name     TEXT NOT NULL
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_device table: %w", err)
 	}
+
+	// Create identity keys table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_identity_keys (
-		our_jid  VARCHAR(255),
-		their_id VARCHAR(255),
-		identity BLOB NOT NULL,
-
-		PRIMARY KEY (our_jid, their_id),
-		FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE,
-		CHECK (LENGTH(identity) = 32)
-	)`)
+        our_jid  VARCHAR(255),
+        their_id VARCHAR(255),
+        identity LONGBLOB NOT NULL,
+        PRIMARY KEY (our_jid, their_id),
+        FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_identity_keys table: %w", err)
 	}
+
+	// Create pre keys table - use backticks for reserved keyword 'key' in MariaDB
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_pre_keys (
-		jid      VARCHAR(255),
-		key_id   INTEGER,
-		key      BLOB NOT NULL,
-		uploaded BOOLEAN NOT NULL,
-
-		PRIMARY KEY (jid, key_id),
-		FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE,
-		CHECK (key_id >= 0 AND key_id < 16777216),
-		CHECK (LENGTH(key) = 32)
-	)`)
+        jid VARCHAR(255),
+        key_id INTEGER,
+        ` + "`key`" + ` LONGBLOB NOT NULL,
+        uploaded TINYINT(1) NOT NULL,
+        PRIMARY KEY (jid, key_id),
+        FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_pre_keys table: %w", err)
 	}
+
+	// Create sessions table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_sessions (
-		our_jid  VARCHAR(255),
-		their_id VARCHAR(255),
-		session  BLOB,
-
-		PRIMARY KEY (our_jid, their_id),
-		FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
-	)`)
+        our_jid VARCHAR(255),
+        their_id VARCHAR(255),
+        session LONGBLOB,
+        PRIMARY KEY (our_jid, their_id),
+        FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_sessions table: %w", err)
 	}
+
+	// Create sender keys table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_sender_keys (
-		our_jid    VARCHAR(255),
-		chat_id    VARCHAR(255),
-		sender_id  VARCHAR(255),
-		sender_key BLOB NOT NULL,
-
-		PRIMARY KEY (our_jid, chat_id, sender_id),
-		FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
-	)`)
+        our_jid VARCHAR(255),
+        chat_id VARCHAR(255),
+        sender_id VARCHAR(255),
+        sender_key LONGBLOB NOT NULL,
+        PRIMARY KEY (our_jid, chat_id, sender_id),
+        FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_sender_keys table: %w", err)
 	}
+
+	// Create app state sync keys table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_app_state_sync_keys (
-		jid         VARCHAR(255),
-		key_id      BLOB,
-		key_data    BLOB  NOT NULL,
-		timestamp   BIGINT NOT NULL,
-		fingerprint BLOB  NOT NULL,
-
-		PRIMARY KEY (jid, key_id(255)),
-		FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
-	)`)
+        jid VARCHAR(255),
+        key_id LONGBLOB,
+        key_data LONGBLOB NOT NULL,
+        timestamp BIGINT NOT NULL,
+        fingerprint LONGBLOB NOT NULL,
+        PRIMARY KEY (jid, key_id(255)),
+        FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_app_state_sync_keys table: %w", err)
 	}
+
+	// Create app state version table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_app_state_version (
-		jid     VARCHAR(255),
-		name    VARCHAR(255),
-		version BIGINT NOT NULL,
-		hash    BLOB   NOT NULL,
-
-		PRIMARY KEY (jid, name),
-		FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE,
-		CHECK (LENGTH(hash) = 128)
-	)`)
+        jid VARCHAR(255),
+        name VARCHAR(255),
+        version BIGINT NOT NULL,
+        hash LONGBLOB NOT NULL,
+        PRIMARY KEY (jid, name),
+        FOREIGN KEY (jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_app_state_version table: %w", err)
 	}
+
+	// Create app state mutation macs table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_app_state_mutation_macs (
-		jid       VARCHAR(255),
-		name      VARCHAR(255),
-		version   BIGINT,
-		index_mac BLOB,
-		value_mac BLOB NOT NULL,
-
-		PRIMARY KEY (jid, name, version, index_mac(32)),
-		FOREIGN KEY (jid, name) REFERENCES whatsmeow_app_state_version(jid, name) ON DELETE CASCADE ON UPDATE CASCADE,
-		CHECK (LENGTH(index_mac) = 32),
-		CHECK (LENGTH(value_mac) = 32)
-	)`)
+        jid VARCHAR(255),
+        name VARCHAR(255),
+        version BIGINT,
+        index_mac LONGBLOB,
+        value_mac LONGBLOB NOT NULL,
+        PRIMARY KEY (jid, name, version, index_mac(32)),
+        FOREIGN KEY (jid, name) REFERENCES whatsmeow_app_state_version(jid, name) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_app_state_mutation_macs table: %w", err)
 	}
+
+	// Create contacts table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_contacts (
-		our_jid       VARCHAR(255),
-		their_jid     VARCHAR(255),
-		first_name    TEXT,
-		full_name     TEXT,
-		push_name     TEXT,
-		business_name TEXT,
-
-		PRIMARY KEY (our_jid, their_jid),
-		FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
-	)`)
+        our_jid VARCHAR(255),
+        their_jid VARCHAR(255),
+        first_name TEXT,
+        full_name TEXT,
+        push_name TEXT,
+        business_name TEXT,
+        PRIMARY KEY (our_jid, their_jid),
+        FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_contacts table: %w", err)
 	}
+
+	// Create chat settings table
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_chat_settings (
-		our_jid     VARCHAR(255),
-		chat_jid    VARCHAR(255),
-		muted_until BIGINT  NOT NULL DEFAULT 0,
-		pinned      BOOLEAN NOT NULL DEFAULT false,
-		archived    BOOLEAN NOT NULL DEFAULT false,
-
-		PRIMARY KEY (our_jid, chat_jid),
-		FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
-	)`)
+        our_jid VARCHAR(255),
+        chat_jid VARCHAR(255),
+        muted_until BIGINT NOT NULL DEFAULT 0,
+        pinned TINYINT(1) NOT NULL DEFAULT 0,
+        archived TINYINT(1) NOT NULL DEFAULT 0,
+        PRIMARY KEY (our_jid, chat_jid),
+        FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+    )`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create whatsmeow_chat_settings table: %w", err)
 	}
+
 	return nil
 }
 
@@ -441,9 +414,7 @@ UPDATE whatsmeow_device SET adv_account_sig_key=(
 	FROM whatsmeow_identity_keys
 	WHERE our_jid=whatsmeow_device.jid
 	  AND their_id=CONCAT(SUBSTRING_INDEX(whatsmeow_device.jid, '.', 1), ':0')
-);
-DELETE FROM whatsmeow_device WHERE adv_account_sig_key IS NULL;
-ALTER TABLE whatsmeow_device MODIFY adv_account_sig_key BLOB NOT NULL;
+)
 `
 
 func upgradeV2(tx *sql.Tx, container *Container) error {
@@ -465,7 +436,16 @@ func upgradeV2(tx *sql.Tx, container *Container) error {
 	if strings.Contains(container.dialect, "postgres") || container.dialect == "pgx" {
 		_, err = tx.Exec(fillSigKeyPostgres)
 	} else if container.dialect == "mysql" {
+		// For MySQL/MariaDB, execute statements separately
 		_, err = tx.Exec(fillSigKeyMySQL)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("DELETE FROM whatsmeow_device WHERE adv_account_sig_key IS NULL")
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("ALTER TABLE whatsmeow_device MODIFY adv_account_sig_key BLOB NOT NULL")
 	} else {
 		_, err = tx.Exec(fillSigKeySQLite)
 	}
@@ -473,38 +453,53 @@ func upgradeV2(tx *sql.Tx, container *Container) error {
 }
 
 func upgradeV3(tx *sql.Tx, container *Container) error {
-	blobType := "bytea"
 	if container.dialect == "mysql" {
-		blobType = "BLOB"
+		_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_message_secrets (
+            our_jid VARCHAR(255),
+            chat_jid VARCHAR(255),
+            sender_jid VARCHAR(255),
+            message_id VARCHAR(255),
+            ` + "`key`" + ` LONGBLOB NOT NULL,
+            PRIMARY KEY (our_jid, chat_jid, sender_jid, message_id),
+            FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+        )`)
+		return err
+	} else {
+		blobType := "bytea"
+		_, err := tx.Exec(`CREATE TABLE whatsmeow_message_secrets (
+            our_jid TEXT,
+            chat_jid TEXT,
+            sender_jid TEXT,
+            message_id TEXT,
+            key ` + blobType + ` NOT NULL,
+            PRIMARY KEY (our_jid, chat_jid, sender_jid, message_id),
+            FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
+        )`)
+		return err
 	}
-
-	_, err := tx.Exec(`CREATE TABLE whatsmeow_message_secrets (
-		our_jid    TEXT,
-		chat_jid   TEXT,
-		sender_jid TEXT,
-		message_id TEXT,
-		key        ` + blobType + ` NOT NULL,
-
-		PRIMARY KEY (our_jid, chat_jid, sender_jid, message_id),
-		FOREIGN KEY (our_jid) REFERENCES whatsmeow_device(jid) ON DELETE CASCADE ON UPDATE CASCADE
-	)`)
-	return err
 }
 
 func upgradeV4(tx *sql.Tx, container *Container) error {
-	blobType := "bytea"
 	if container.dialect == "mysql" {
-		blobType = "BLOB"
+		_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_privacy_tokens (
+            our_jid VARCHAR(255),
+            their_jid VARCHAR(255),
+            token LONGBLOB NOT NULL,
+            timestamp BIGINT NOT NULL,
+            PRIMARY KEY (our_jid, their_jid)
+        )`)
+		return err
+	} else {
+		blobType := "bytea"
+		_, err := tx.Exec(`CREATE TABLE whatsmeow_privacy_tokens (
+            our_jid TEXT,
+            their_jid TEXT,
+            token ` + blobType + ` NOT NULL,
+            timestamp BIGINT NOT NULL,
+            PRIMARY KEY (our_jid, their_jid)
+        )`)
+		return err
 	}
-
-	_, err := tx.Exec(`CREATE TABLE whatsmeow_privacy_tokens (
-		our_jid   TEXT,
-		their_jid TEXT,
-		token     ` + blobType + `  NOT NULL,
-		timestamp BIGINT NOT NULL,
-		PRIMARY KEY (our_jid, their_jid)
-	)`)
-	return err
 }
 
 func upgradeV5(tx *sql.Tx, container *Container) error {
@@ -522,3 +517,80 @@ func upgradeV6(tx *sql.Tx, container *Container) error {
 	}
 	return err
 }
+
+func upgradeV7(tx *sql.Tx, container *Container) error {
+	// This upgrade is only needed for MySQL/MariaDB to support emoji characters
+	if container.dialect == "mysql" {
+			// Use standard MySQL syntax that works in all versions
+			// First disable foreign key checks to avoid constraint issues
+			_, err := tx.Exec("SET FOREIGN_KEY_CHECKS = 0")
+			if err != nil {
+				return fmt.Errorf("failed to disable foreign key checks: %w", err)
+			}
+			
+			// Set database default character set
+			_, err = tx.Exec("SET NAMES utf8mb4")
+			if err != nil {
+				// Re-enable foreign key checks before returning
+				_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+				return fmt.Errorf("failed to set default character set: %w", err)
+			}
+			
+			// List tables to update
+			tables := []string{
+				"whatsmeow_contacts", 
+				"whatsmeow_device",
+				"whatsmeow_chat_settings",
+				"whatsmeow_message_secrets",
+				"whatsmeow_app_state_sync_keys",
+				"whatsmeow_app_state_version", 
+				"whatsmeow_identity_keys",
+				"whatsmeow_pre_keys",
+				"whatsmeow_sessions",
+				"whatsmeow_sender_keys",
+				"whatsmeow_privacy_tokens",
+			}
+			
+			// For each table, modify character set using standard ALTER TABLE syntax
+			for _, table := range tables {
+				// Use the more compatible ALTER TABLE syntax
+				_, err := tx.Exec("ALTER TABLE " + table + " CHARACTER SET = utf8mb4 COLLATE utf8mb4_unicode_ci")
+				if err != nil {
+					// Re-enable foreign key checks before returning error
+					_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+					return fmt.Errorf("failed to convert %s table to utf8mb4: %w", table, err)
+				}
+			}
+			
+			// Define text columns that need explicit conversion - use safe ALTER TABLE statements
+			textColumns := map[string][]string{
+				"whatsmeow_contacts": {
+					"first_name", "full_name", "push_name", "business_name",
+				},
+				"whatsmeow_device": {
+					"platform", "business_name", "push_name",
+				},
+			}
+			
+			// Update text columns to utf8mb4
+			for table, columns := range textColumns {
+				for _, column := range columns {
+					// Execute separate statements for each column to ensure compatibility
+					_, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s MODIFY %s TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", 
+						table, column))
+					if err != nil {
+						// Re-enable foreign key checks before returning
+						_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+						return fmt.Errorf("failed to modify %s.%s column to utf8mb4: %w", table, column, err)
+					}
+				}
+			}
+			
+			// Re-enable foreign key checks
+			_, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+			if err != nil {
+				return fmt.Errorf("failed to re-enable foreign key checks: %w", err)
+			}
+		}
+		return nil
+	}

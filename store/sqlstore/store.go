@@ -67,6 +67,7 @@ const (
 	deleteAllIdentitiesQuery = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id LIKE $2`
 	deleteIdentityQuery      = `DELETE FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
 	getIdentityQuery         = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
+	insertPreKeyQuery        = `INSERT INTO whatsmeow_pre_keys (jid, key_id, ` + "`key`" + `, uploaded) VALUES ($1, $2, $3, $4)`
 )
 
 func (s *SQLStore) dialectQuery(query string) string {
@@ -76,45 +77,100 @@ func (s *SQLStore) dialectQuery(query string) string {
 		for i := 1; i <= 20; i++ {
 			result = strings.ReplaceAll(result, fmt.Sprintf("$%d", i), "?")
 		}
-		
-		// Replace ON CONFLICT syntax with MySQL's equivalent for MySQL
+
+		// Replace key with `key` for MySQL
 		if s.dialect == "mysql" {
-			result = strings.Replace(result, 
-				"ON CONFLICT (our_jid, their_id) DO UPDATE SET",
-				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result, 
-				"ON CONFLICT (jid, key_id) DO UPDATE",
-				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result, 
+			// Handle the field name correctly by escaping with backticks
+			result = strings.ReplaceAll(result, "key FROM", "`key` FROM")
+			result = strings.ReplaceAll(result, "key_id, key FROM", "key_id, `key` FROM")
+			result = strings.ReplaceAll(result, "(jid, key_id, key, uploaded)", "(jid, key_id, `key`, uploaded)")
+			result = strings.ReplaceAll(result, "message_id, key)", "message_id, `key`)")
+
+			// Fix WHERE clause issues in ON DUPLICATE KEY statements
+			result = strings.Replace(result,
+				"WHERE VALUES(timestamp) > whatsmeow_app_state_sync_keys.timestamp",
+				"", -1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity",
+				"ON DUPLICATE KEY UPDATE identity=VALUES(identity)",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session",
+				"ON DUPLICATE KEY UPDATE session=VALUES(session)",
+				-1)
+
+			result = strings.Replace(result,
 				"ON CONFLICT (our_jid, chat_jid) DO UPDATE SET",
-				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result, 
-				"ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET",
-				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result, 
-				"ON CONFLICT (jid, name) DO UPDATE SET",
-				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result, 
-				"ON CONFLICT (our_jid, their_jid) DO UPDATE SET",
-				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result, 
+				"ON DUPLICATE KEY UPDATE",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key",
+				"ON DUPLICATE KEY UPDATE sender_key=VALUES(sender_key)",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (jid, key_id) DO UPDATE",
+				"ON DUPLICATE KEY UPDATE",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (jid, name) DO UPDATE SET version=excluded.version, hash=excluded.hash",
+				"ON DUPLICATE KEY UPDATE version=VALUES(version), hash=VALUES(hash)",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_jid) DO UPDATE SET first_name=excluded.first_name, full_name=excluded.full_name",
+				"ON DUPLICATE KEY UPDATE first_name=VALUES(first_name), full_name=VALUES(full_name)",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_jid) DO UPDATE SET push_name=excluded.push_name",
+				"ON DUPLICATE KEY UPDATE push_name=VALUES(push_name)",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_jid) DO UPDATE SET business_name=excluded.business_name",
+				"ON DUPLICATE KEY UPDATE business_name=VALUES(business_name)",
+				-1)
+
+			result = strings.Replace(result,
 				"ON CONFLICT (our_jid, chat_jid, sender_jid, message_id) DO NOTHING",
-				"ON DUPLICATE KEY UPDATE our_jid=our_jid", -1)
-			
-			// Replace excluded.X with VALUES(X) for MySQL
-			result = strings.ReplaceAll(result, "excluded.", "VALUES(")
-			result = strings.ReplaceAll(result, "=VALUES(", "=VALUES(")
-			result = strings.ReplaceAll(result, ">VALUES(", ">VALUES(")
-			result = strings.Replace(result, "WHERE VALUES(timestamp", "WHERE VALUES(timestamp)", -1)
+				"ON DUPLICATE KEY UPDATE our_jid=our_jid",
+				-1)
+
+			result = strings.Replace(result,
+				"ON CONFLICT (jid, key_id) DO UPDATE SET key_data=excluded.key_data, timestamp=excluded.timestamp, fingerprint=excluded.fingerprint WHERE excluded.timestamp > whatsmeow_app_state_sync_keys.timestamp",
+				"ON DUPLICATE KEY UPDATE key_data=VALUES(key_data), timestamp=VALUES(timestamp), fingerprint=VALUES(fingerprint) WHERE VALUES(timestamp) > whatsmeow_app_state_sync_keys.timestamp",
+				-1)
 		}
-		
+
 		return result
 	}
 	return query
 }
 
 func (s *SQLStore) PutIdentity(address string, key [32]byte) error {
-	_, err := s.db.Exec(s.dialectQuery(putIdentityQuery), s.JID, address, key[:])
+	var query string
+	if s.dialect == "mysql" {
+		query = `
+		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) 
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE identity=VALUES(identity)
+		`
+	} else if s.dialect == "sqlite3" {
+		query = `
+		INSERT INTO whatsmeow_identity_keys (our_jid, their_id, identity) 
+		VALUES (?, ?, ?)
+		ON CONFLICT (our_jid, their_id) DO UPDATE SET identity=excluded.identity
+		`
+	} else {
+		query = putIdentityQuery
+	}
+
+	_, err := s.db.Exec(query, s.JID, address, key[:])
 	return err
 }
 
@@ -170,7 +226,24 @@ func (s *SQLStore) HasSession(address string) (has bool, err error) {
 }
 
 func (s *SQLStore) PutSession(address string, session []byte) error {
-	_, err := s.db.Exec(s.dialectQuery(putSessionQuery), s.JID, address, session)
+	var query string
+	if s.dialect == "mysql" {
+		query = `
+		INSERT INTO whatsmeow_sessions (our_jid, their_id, session)
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE session=VALUES(session)
+		`
+	} else if s.dialect == "sqlite3" {
+		query = `
+		INSERT INTO whatsmeow_sessions (our_jid, their_id, session)
+		VALUES (?, ?, ?) 
+		ON CONFLICT (our_jid, their_id) DO UPDATE SET session=excluded.session
+		`
+	} else {
+		query = putSessionQuery
+	}
+
+	_, err := s.db.Exec(query, s.JID, address, session)
 	return err
 }
 
@@ -186,9 +259,8 @@ func (s *SQLStore) DeleteSession(address string) error {
 
 const (
 	getLastPreKeyIDQuery        = `SELECT MAX(key_id) FROM whatsmeow_pre_keys WHERE jid=$1`
-	insertPreKeyQuery           = `INSERT INTO whatsmeow_pre_keys (jid, key_id, key, uploaded) VALUES ($1, $2, $3, $4)`
-	getUnuploadedPreKeysQuery   = `SELECT key_id, key FROM whatsmeow_pre_keys WHERE jid=$1 AND uploaded=false ORDER BY key_id LIMIT $2`
-	getPreKeyQuery              = `SELECT key_id, key FROM whatsmeow_pre_keys WHERE jid=$1 AND key_id=$2`
+	getUnuploadedPreKeysQuery   = `SELECT key_id, ` + "`key`" + ` FROM whatsmeow_pre_keys WHERE jid=$1 AND uploaded=false ORDER BY key_id LIMIT $2`
+	getPreKeyQuery              = `SELECT key_id, ` + "`key`" + ` FROM whatsmeow_pre_keys WHERE jid=$1 AND key_id=$2`
 	deletePreKeyQuery           = `DELETE FROM whatsmeow_pre_keys WHERE jid=$1 AND key_id=$2`
 	markPreKeysAsUploadedQuery  = `UPDATE whatsmeow_pre_keys SET uploaded=true WHERE jid=$1 AND key_id<=$2`
 	getUploadedPreKeyCountQuery = `SELECT COUNT(*) FROM whatsmeow_pre_keys WHERE jid=$1 AND uploaded=true`
@@ -196,7 +268,15 @@ const (
 
 func (s *SQLStore) genOnePreKey(id uint32, markUploaded bool) (*keys.PreKey, error) {
 	key := keys.NewPreKey(id)
-	_, err := s.db.Exec(s.dialectQuery(insertPreKeyQuery), s.JID, key.KeyID, key.Priv[:], markUploaded)
+
+	var query string
+	if s.dialect == "mysql" {
+		query = "INSERT INTO whatsmeow_pre_keys (jid, key_id, `key`, uploaded) VALUES (?, ?, ?, ?)"
+	} else {
+		query = s.dialectQuery(insertPreKeyQuery)
+	}
+
+	_, err := s.db.Exec(query, s.JID, key.KeyID, key.Priv[:], markUploaded)
 	return key, err
 }
 
@@ -327,6 +407,45 @@ const (
 )
 
 func (s *SQLStore) PutAppStateSyncKey(id []byte, key store.AppStateSyncKey) error {
+	if s.dialect == "mysql" {
+		// Use standard MySQL syntax that works in all versions
+		// Simple logic: Try to insert, if it fails because the key exists, do an update
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		// Check if key exists and if our timestamp is newer
+		var exists bool
+		var existingTimestamp int64
+		err = tx.QueryRow("SELECT 1, timestamp FROM whatsmeow_app_state_sync_keys WHERE jid=? AND key_id=?", s.JID, id).Scan(&exists, &existingTimestamp)
+
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			tx.Rollback()
+			return err
+		}
+
+		if errors.Is(err, sql.ErrNoRows) || key.Timestamp > existingTimestamp {
+			// Insert or update as necessary
+			_, err = tx.Exec(`
+					INSERT INTO whatsmeow_app_state_sync_keys (jid, key_id, key_data, timestamp, fingerprint)
+					VALUES (?, ?, ?, ?, ?)
+					ON DUPLICATE KEY UPDATE 
+						key_data=VALUES(key_data), 
+						timestamp=VALUES(timestamp), 
+						fingerprint=VALUES(fingerprint)
+				`, s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
+
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+
+		return tx.Commit()
+	}
+
+	// For other databases, use the standard query
 	_, err := s.db.Exec(s.dialectQuery(putAppStateSyncKeyQuery), s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
 	return err
 }
@@ -394,28 +513,53 @@ type execable interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 }
 
+// Fix the putAppStateMutationMACs function for better MySQL compatibility
 func (s *SQLStore) putAppStateMutationMACs(tx execable, name string, version uint64, mutations []store.AppStateMutationMAC) error {
-	values := make([]interface{}, 3+len(mutations)*2)
-	queryParts := make([]string, len(mutations))
-	values[0] = s.JID
-	values[1] = name
-	values[2] = version
-	placeholderSyntax := "($1, $2, $3, $%d, $%d)"
-	if s.dialect == "sqlite3" || s.dialect == "mysql" {
-		placeholderSyntax = "(?, ?, ?, ?, ?)"
-	}
-	for i, mutation := range mutations {
-		baseIndex := 3 + i*2
-		values[baseIndex] = mutation.IndexMAC
-		values[baseIndex+1] = mutation.ValueMAC
-		if s.dialect == "sqlite3" || s.dialect == "mysql" {
-			queryParts[i] = placeholderSyntax
-		} else {
-			queryParts[i] = fmt.Sprintf(placeholderSyntax, baseIndex+1, baseIndex+2)
+	// Use simpler, more compatible approach for MySQL
+	if s.dialect == "mysql" {
+		// For MySQL, use individual INSERT statements in a transaction for maximum compatibility
+		for _, mutation := range mutations {
+			query := "INSERT INTO whatsmeow_app_state_mutation_macs (jid, name, version, index_mac, value_mac) VALUES (?, ?, ?, ?, ?)"
+			_, err := tx.Exec(query, s.JID, name, version, mutation.IndexMAC, mutation.ValueMAC)
+			if err != nil {
+				return err
+			}
 		}
+		return nil
+	} else if s.dialect == "sqlite3" {
+		placeholders := make([]string, len(mutations))
+		args := make([]interface{}, 0, len(mutations)*5) // 5 args per mutation
+
+		for i, mutation := range mutations {
+			placeholders[i] = "(?, ?, ?, ?, ?)"
+			args = append(args, s.JID, name, version, mutation.IndexMAC, mutation.ValueMAC)
+		}
+
+		query := "INSERT INTO whatsmeow_app_state_mutation_macs (jid, name, version, index_mac, value_mac) VALUES " +
+			strings.Join(placeholders, ",")
+
+		_, err := tx.Exec(query, args...)
+		return err
+	} else {
+		// PostgreSQL specific code for handling array parameters
+		placeholders := make([]string, len(mutations))
+		argsCount := 1
+		args := make([]interface{}, 0, len(mutations)*2+3)
+		args = append(args, s.JID, name, version)
+
+		for i, mutation := range mutations {
+			baseIndex := argsCount
+			args = append(args, mutation.IndexMAC, mutation.ValueMAC)
+			placeholders[i] = fmt.Sprintf("($1, $2, $3, $%d, $%d)", baseIndex+1, baseIndex+2)
+			argsCount += 2
+		}
+
+		query := "INSERT INTO whatsmeow_app_state_mutation_macs (jid, name, version, index_mac, value_mac) VALUES " +
+			strings.Join(placeholders, ",")
+
+		_, err := tx.Exec(query, args...)
+		return err
 	}
-	_, err := tx.Exec(s.dialectQuery(putAppStateMutationMACsQuery)+strings.Join(queryParts, ","), values...)
-	return err
 }
 
 const mutationBatchSize = 400
@@ -752,7 +896,7 @@ func (s *SQLStore) GetChatSettings(chat types.JID) (settings types.LocalChatSett
 
 const (
 	putMsgSecret = `
-		INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, key)
+		INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (our_jid, chat_jid, sender_jid, message_id) DO NOTHING
 	`
@@ -766,18 +910,42 @@ func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err e
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	for _, insert := range inserts {
-		_, err = tx.Exec(s.dialectQuery(putMsgSecret), s.JID, insert.Chat.ToNonAD(), insert.Sender.ToNonAD(), insert.ID, insert.Secret)
+
+	// Use the correct query based on dialect
+	var query string
+	if s.dialect == "mysql" {
+		query = `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `) 
+				VALUES (?, ?, ?, ?, ?)
+				ON DUPLICATE KEY UPDATE our_jid=our_jid`
+	} else {
+		query = s.dialectQuery(putMsgSecret)
 	}
+
+	for _, insert := range inserts {
+		_, err = tx.Exec(query, s.JID, insert.Chat.ToNonAD(), insert.Sender.ToNonAD(), insert.ID, insert.Secret)
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to insert message secret: %w", err)
+		}
+	}
+
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	return
+	return nil
 }
 
 func (s *SQLStore) PutMessageSecret(chat, sender types.JID, id types.MessageID, secret []byte) (err error) {
-	_, err = s.db.Exec(s.dialectQuery(putMsgSecret), s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
+	// For MySQL we need explicit backticks around the "key" column
+	if s.dialect == "mysql" {
+		query := `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `) 
+				 VALUES (?, ?, ?, ?, ?)
+				 ON DUPLICATE KEY UPDATE our_jid=our_jid`
+		_, err = s.db.Exec(query, s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
+	} else {
+		_, err = s.db.Exec(s.dialectQuery(putMsgSecret), s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
+	}
 	return
 }
 
@@ -799,6 +967,32 @@ const (
 )
 
 func (s *SQLStore) PutPrivacyTokens(tokens ...store.PrivacyToken) error {
+	if s.dialect == "mysql" {
+		// Use a transaction for better error handling
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+
+		// Process each token individually for maximum compatibility with all MySQL versions
+		for _, token := range tokens {
+			query := `
+				INSERT INTO whatsmeow_privacy_tokens (our_jid, their_jid, token, timestamp)
+				VALUES (?, ?, ?, ?)
+				ON DUPLICATE KEY UPDATE token=VALUES(token), timestamp=VALUES(timestamp)
+				`
+
+			_, err := tx.Exec(query, s.JID, token.User.ToNonAD().String(), token.Token, token.Timestamp.Unix())
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+
+		return tx.Commit()
+	}
+
+	// Standard approach for non-MySQL databases
 	args := make([]any, 1+len(tokens)*3)
 	placeholders := make([]string, len(tokens))
 	args[0] = s.JID
