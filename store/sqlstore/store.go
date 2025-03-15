@@ -387,7 +387,7 @@ func (s *SQLStore) PutSenderKey(group, user string, session []byte) error {
 	if s.dialect == "mysql" {
 		// Use a direct MySQL query with proper backtick escaping
 		_, err := s.db.Exec(`
-			INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) 
+			INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key)
 			VALUES (?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE sender_key=VALUES(sender_key)
 		`, s.JID, group, user, session)

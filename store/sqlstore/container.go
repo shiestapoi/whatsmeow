@@ -250,7 +250,7 @@ func (c *Container) PutDevice(device *store.Device) error {
 									  platform, business_name, push_name, facebook_uuid)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
-		    platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name), 
+		    platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name),
 		    facebook_uuid=VALUES(facebook_uuid)
 		`
 	} else if c.dialect == "sqlite" {
