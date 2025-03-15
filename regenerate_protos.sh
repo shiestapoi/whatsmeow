@@ -37,13 +37,13 @@ echo "Created temporary directory: $TEMP_DIR"
 # Process each proto file
 for proto_file in $PROTO_FILES; do
     echo "Processing $proto_file..."
-    
+
     # Extract the directory name (e.g., waCommon from ./proto/waCommon/WACommon.proto)
     dir_name=$(dirname "$proto_file" | sed 's|./proto/||')
-    
+
     # Create the directory in the temporary location
     mkdir -p "$TEMP_DIR/$dir_name"
-    
+
     # Copy the proto file to the temporary location
     cp "$proto_file" "$TEMP_DIR/$dir_name/"
 done
@@ -51,11 +51,11 @@ done
 # Now compile all proto files using the temporary directory structure
 for proto_file in $(find "$TEMP_DIR" -name "*.proto" -type f); do
     echo "Compiling $(basename "$proto_file")..."
-    
+
     # Get the relative path for output
     rel_path=$(echo "$proto_file" | sed "s|$TEMP_DIR/||")
     dir_name=$(dirname "$rel_path")
-    
+
     # Compile the proto file
     protoc -I="$TEMP_DIR" --go_out="$PROJECT_ROOT" --go_opt=module=github.com/shiestapoi/whatsmeow "$proto_file"
 done
