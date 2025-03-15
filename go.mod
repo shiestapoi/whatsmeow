@@ -19,3 +19,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 )
+
+// This prevents go mod tidy from updating protobuf to v1.36.5
+// replace google.golang.org/protobuf => google.golang.org/protobuf v1.31.0
