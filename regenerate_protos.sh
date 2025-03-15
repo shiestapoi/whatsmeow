@@ -9,14 +9,14 @@ if ! command -v protoc &> /dev/null; then
     echo "- For Mac: brew install protobuf"
     echo ""
     echo "After installing protoc, also install protoc-gen-go with:"
-    echo "go install google.golang.org/protobuf/cmd/protoc-gen-go@latest"
+    echo "go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0"
     exit 1
 fi
 
 # Check if protoc-gen-go is installed
 if ! command -v protoc-gen-go &> /dev/null; then
-    echo "Installing protoc-gen-go..."
-    go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+    echo "Installing protoc-gen-go v1.31.0..."
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
 fi
 
 # Set the working directory to the project root
@@ -60,12 +60,19 @@ for proto_file in $(find "$TEMP_DIR" -name "*.proto" -type f); do
     protoc -I="$TEMP_DIR" --go_out="$PROJECT_ROOT" --go_opt=module=github.com/shiestapoi/whatsmeow "$proto_file"
 done
 
-# Fix potential issues in generated .pb.go files
-echo "Checking for issues in generated files..."
+# Fix potential issues in ALL generated .pb.go files
+echo "Applying fixes to all generated files..."
 for pb_file in $(find ./proto -name "*.pb.go" -type f); do
-    # Check for and fix potential panic points
-    sed -i 's/x\[-1\]/x\[0\]/g' "$pb_file"
-    echo "Fixed $pb_file"
+    # Make a backup
+    cp "$pb_file" "${pb_file}.bak"
+    
+    # Fix the slice bounds issue - covering all potential patterns
+    sed -i 's/x\[-1\]/x[0]/g' "$pb_file"
+    sed -i 's/dv\[-1\]/dv[0]/g' "$pb_file"
+    sed -i 's/sv\[-1\]/sv[0]/g' "$pb_file"
+    sed -i 's/bv\[-1\]/bv[0]/g' "$pb_file"
+    
+    echo "Fixed and backed up $pb_file"
 done
 
 # Clean up

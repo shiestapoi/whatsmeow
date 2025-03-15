@@ -21,4 +21,6 @@ require (
 )
 
 // This prevents go mod tidy from updating protobuf to v1.36.5
-// replace google.golang.org/protobuf => google.golang.org/protobuf v1.31.0
+replace google.golang.org/protobuf => google.golang.org/protobuf v1.31.0
+
+replace github.com/shiestapoi/whatsmeow => github.com/shiestapoi/whatsmeow v0.0.0-20250315104305-fecd891dc006
