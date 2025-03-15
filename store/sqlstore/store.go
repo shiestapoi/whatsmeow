@@ -76,38 +76,38 @@ func (s *SQLStore) dialectQuery(query string) string {
 		for i := 1; i <= 20; i++ {
 			result = strings.ReplaceAll(result, fmt.Sprintf("$%d", i), "?")
 		}
-
+		
 		// Replace ON CONFLICT syntax with MySQL's equivalent for MySQL
 		if s.dialect == "mysql" {
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (our_jid, their_id) DO UPDATE SET",
 				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (jid, key_id) DO UPDATE",
 				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (our_jid, chat_jid) DO UPDATE SET",
 				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET",
 				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (jid, name) DO UPDATE SET",
 				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (our_jid, their_jid) DO UPDATE SET",
 				"ON DUPLICATE KEY UPDATE", -1)
-			result = strings.Replace(result,
+			result = strings.Replace(result, 
 				"ON CONFLICT (our_jid, chat_jid, sender_jid, message_id) DO NOTHING",
 				"ON DUPLICATE KEY UPDATE our_jid=our_jid", -1)
-
+			
 			// Replace excluded.X with VALUES(X) for MySQL
 			result = strings.ReplaceAll(result, "excluded.", "VALUES(")
 			result = strings.ReplaceAll(result, "=VALUES(", "=VALUES(")
 			result = strings.ReplaceAll(result, ">VALUES(", ">VALUES(")
 			result = strings.Replace(result, "WHERE VALUES(timestamp", "WHERE VALUES(timestamp)", -1)
 		}
-
+		
 		return result
 	}
 	return query

@@ -241,7 +241,7 @@ func upgradeV1(tx *sql.Tx, c *Container) error {
 
 func upgradeV1MySQL(tx *sql.Tx, c *Container) error {
 	// MySQL version with BLOB instead of bytea
-
+	
 	// Check if it's MySQL 8 or newer which has proper CHECK constraint support
 	var isMySQLv8 bool
 	var version string
@@ -249,10 +249,10 @@ func upgradeV1MySQL(tx *sql.Tx, c *Container) error {
 	if err == nil && strings.HasPrefix(version, "8.") {
 		isMySQLv8 = true
 	}
-
+	
 	// Define constraint checks based on MySQL version
 	var checksSQL string
-	if isMySQLv8 {
+	if (isMySQLv8) {
 		// MySQL 8+ supports standard CHECK syntax
 		checksSQL = `
 		CHECK (registration_id >= 0 AND registration_id < 4294967296),
@@ -268,7 +268,7 @@ func upgradeV1MySQL(tx *sql.Tx, c *Container) error {
 		// For older MySQL versions that don't support CHECK properly, we'll leave these out
 		checksSQL = ""
 	}
-
+	
 	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS whatsmeow_device (
 		jid VARCHAR(255) PRIMARY KEY,
 

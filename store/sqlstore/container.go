@@ -106,32 +106,13 @@ func (c *Container) scanDevice(row scannable) (*store.Device, error) {
 	device.SignedPreKey = &keys.PreKey{}
 	var noisePriv, identityPriv, preKeyPriv, preKeySig []byte
 	var account waAdv.ADVSignedDeviceIdentity
-	var fbUUIDStr sql.NullString
 	var fbUUID uuid.NullUUID
-	var err error
 
-	// First try a UUID scan for postgres/sqlite
-	err = row.Scan(
+	err := row.Scan(
 		&device.ID, &device.RegistrationID, &noisePriv, &identityPriv,
 		&preKeyPriv, &device.SignedPreKey.KeyID, &preKeySig,
 		&device.AdvSecretKey, &account.Details, &account.AccountSignature, &account.AccountSignatureKey, &account.DeviceSignature,
 		&device.Platform, &device.BusinessName, &device.PushName, &fbUUID)
-
-	if err != nil && c.dialect == "mysql" {
-		// For MySQL, try scanning the UUID as a string
-		err = row.Scan(
-			&device.ID, &device.RegistrationID, &noisePriv, &identityPriv,
-			&preKeyPriv, &device.SignedPreKey.KeyID, &preKeySig,
-			&device.AdvSecretKey, &account.Details, &account.AccountSignature, &account.AccountSignatureKey, &account.DeviceSignature,
-			&device.Platform, &device.BusinessName, &device.PushName, &fbUUIDStr)
-
-		if err == nil && fbUUIDStr.Valid {
-			device.FacebookUUID, _ = uuid.Parse(fUUIDStr.String)
-		}
-	} else if err == nil {
-		device.FacebookUUID = fbUUID.UUID
-	}
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan session: %w", err)
 	} else if len(noisePriv) != 32 || len(identityPriv) != 32 || len(preKeyPriv) != 32 || len(preKeySig) != 64 {
@@ -143,6 +124,7 @@ func (c *Container) scanDevice(row scannable) (*store.Device, error) {
 	device.SignedPreKey.KeyPair = *keys.NewKeyPairFromPrivateKey(*(*[32]byte)(preKeyPriv))
 	device.SignedPreKey.Signature = (*[64]byte)(preKeySig)
 	device.Account = &account
+	device.FacebookUUID = fbUUID.UUID
 
 	innerStore := NewSQLStore(c, *device.ID)
 	device.Identities = innerStore
@@ -287,24 +269,11 @@ func (c *Container) PutDevice(device *store.Device) error {
 		}
 	}
 
-	var fbUUIDValue interface{}
-	if c.dialect == "mysql" {
-		// For MySQL, store as string
-		if device.FacebookUUID != uuid.Nil {
-			fbUUIDValue = device.FacebookUUID.String()
-		} else {
-			fbUUIDValue = nil
-		}
-	} else {
-		// For other databases, use the NullUUID type
-		fbUUIDValue = uuid.NullUUID{UUID: device.FacebookUUID, Valid: device.FacebookUUID != uuid.Nil}
-	}
-
 	_, err := c.db.Exec(insertStmt,
 		device.ID.String(), device.RegistrationID, device.NoiseKey.Priv[:], device.IdentityKey.Priv[:],
 		device.SignedPreKey.Priv[:], device.SignedPreKey.KeyID, device.SignedPreKey.Signature[:],
 		device.AdvSecretKey, device.Account.Details, device.Account.AccountSignature, device.Account.AccountSignatureKey, device.Account.DeviceSignature,
-		device.Platform, device.BusinessName, device.PushName, fbUUIDValue)
+		device.Platform, device.BusinessName, device.PushName, uuid.NullUUID{UUID: device.FacebookUUID, Valid: device.FacebookUUID != uuid.Nil})
 
 	if !device.Initialized {
 		innerStore := NewSQLStore(c, *device.ID)
