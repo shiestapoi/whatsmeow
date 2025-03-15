@@ -521,76 +521,76 @@ func upgradeV6(tx *sql.Tx, container *Container) error {
 func upgradeV7(tx *sql.Tx, container *Container) error {
 	// This upgrade is only needed for MySQL/MariaDB to support emoji characters
 	if container.dialect == "mysql" {
-			// Use standard MySQL syntax that works in all versions
-			// First disable foreign key checks to avoid constraint issues
-			_, err := tx.Exec("SET FOREIGN_KEY_CHECKS = 0")
-			if err != nil {
-				return fmt.Errorf("failed to disable foreign key checks: %w", err)
-			}
+		// Use standard MySQL syntax that works in all versions
+		// First disable foreign key checks to avoid constraint issues
+		_, err := tx.Exec("SET FOREIGN_KEY_CHECKS = 0")
+		if err != nil {
+			return fmt.Errorf("failed to disable foreign key checks: %w", err)
+		}
 
-			// Set database default character set
-			_, err = tx.Exec("SET NAMES utf8mb4")
+		// Set database default character set
+		_, err = tx.Exec("SET NAMES utf8mb4")
+		if err != nil {
+			// Re-enable foreign key checks before returning
+			_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+			return fmt.Errorf("failed to set default character set: %w", err)
+		}
+
+		// List tables to update
+		tables := []string{
+			"whatsmeow_contacts",
+			"whatsmeow_device",
+			"whatsmeow_chat_settings",
+			"whatsmeow_message_secrets",
+			"whatsmeow_app_state_sync_keys",
+			"whatsmeow_app_state_version",
+			"whatsmeow_identity_keys",
+			"whatsmeow_pre_keys",
+			"whatsmeow_sessions",
+			"whatsmeow_sender_keys",
+			"whatsmeow_privacy_tokens",
+		}
+
+		// For each table, modify character set using standard ALTER TABLE syntax
+		for _, table := range tables {
+			// Use the more compatible ALTER TABLE syntax
+			_, err := tx.Exec("ALTER TABLE " + table + " CHARACTER SET = utf8mb4 COLLATE utf8mb4_unicode_ci")
 			if err != nil {
-				// Re-enable foreign key checks before returning
+				// Re-enable foreign key checks before returning error
 				_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
-				return fmt.Errorf("failed to set default character set: %w", err)
-			}
-
-			// List tables to update
-			tables := []string{
-				"whatsmeow_contacts",
-				"whatsmeow_device",
-				"whatsmeow_chat_settings",
-				"whatsmeow_message_secrets",
-				"whatsmeow_app_state_sync_keys",
-				"whatsmeow_app_state_version",
-				"whatsmeow_identity_keys",
-				"whatsmeow_pre_keys",
-				"whatsmeow_sessions",
-				"whatsmeow_sender_keys",
-				"whatsmeow_privacy_tokens",
-			}
-
-			// For each table, modify character set using standard ALTER TABLE syntax
-			for _, table := range tables {
-				// Use the more compatible ALTER TABLE syntax
-				_, err := tx.Exec("ALTER TABLE " + table + " CHARACTER SET = utf8mb4 COLLATE utf8mb4_unicode_ci")
-				if err != nil {
-					// Re-enable foreign key checks before returning error
-					_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
-					return fmt.Errorf("failed to convert %s table to utf8mb4: %w", table, err)
-				}
-			}
-
-			// Define text columns that need explicit conversion - use safe ALTER TABLE statements
-			textColumns := map[string][]string{
-				"whatsmeow_contacts": {
-					"first_name", "full_name", "push_name", "business_name",
-				},
-				"whatsmeow_device": {
-					"platform", "business_name", "push_name",
-				},
-			}
-
-			// Update text columns to utf8mb4
-			for table, columns := range textColumns {
-				for _, column := range columns {
-					// Execute separate statements for each column to ensure compatibility
-					_, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s MODIFY %s TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
-						table, column))
-					if err != nil {
-						// Re-enable foreign key checks before returning
-						_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
-						return fmt.Errorf("failed to modify %s.%s column to utf8mb4: %w", table, column, err)
-					}
-				}
-			}
-
-			// Re-enable foreign key checks
-			_, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
-			if err != nil {
-				return fmt.Errorf("failed to re-enable foreign key checks: %w", err)
+				return fmt.Errorf("failed to convert %s table to utf8mb4: %w", table, err)
 			}
 		}
-		return nil
+
+		// Define text columns that need explicit conversion - use safe ALTER TABLE statements
+		textColumns := map[string][]string{
+			"whatsmeow_contacts": {
+				"first_name", "full_name", "push_name", "business_name",
+			},
+			"whatsmeow_device": {
+				"platform", "business_name", "push_name",
+			},
+		}
+
+		// Update text columns to utf8mb4
+		for table, columns := range textColumns {
+			for _, column := range columns {
+				// Execute separate statements for each column to ensure compatibility
+				_, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s MODIFY %s TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+					table, column))
+				if err != nil {
+					// Re-enable foreign key checks before returning
+					_, _ = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+					return fmt.Errorf("failed to modify %s.%s column to utf8mb4: %w", table, column, err)
+				}
+			}
+		}
+
+		// Re-enable foreign key checks
+		_, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
+		if err != nil {
+			return fmt.Errorf("failed to re-enable foreign key checks: %w", err)
+		}
 	}
+	return nil
+}
