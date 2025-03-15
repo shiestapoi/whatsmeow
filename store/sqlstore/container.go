@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	mathRand "math/rand"
+	"strings"
 
 	"github.com/google/uuid"
 	"go.mau.fi/util/random"
@@ -92,7 +93,7 @@ SELECT jid, registration_id, noise_key, identity_key,
 FROM whatsmeow_device
 `
 
-const getDeviceQuery = getAllDevicesQuery + " WHERE jid=$1"
+const getDeviceQuery = getAllDevicesQuery + " WHERE jid=?"
 
 type scannable interface {
 	Scan(dest ...interface{}) error
@@ -237,7 +238,38 @@ func (c *Container) PutDevice(device *store.Device) error {
 	if device.ID == nil {
 		return ErrDeviceIDMustBeSet
 	}
-	_, err := c.db.Exec(insertDeviceQuery,
+
+	insertStmt := insertDeviceQuery
+
+	// Replace all $N placeholders with ? for MySQL and SQLite
+	if c.dialect == "sqlite" || c.dialect == "mysql" {
+		insertStmt = strings.ReplaceAll(insertStmt, "$1", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$2", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$3", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$4", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$5", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$6", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$7", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$8", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$9", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$10", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$11", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$12", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$13", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$14", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$15", "?")
+		insertStmt = strings.ReplaceAll(insertStmt, "$16", "?")
+
+		// For MySQL, change ON CONFLICT syntax to MySQL's equivalent
+		if c.dialect == "mysql" {
+			insertStmt = strings.Replace(insertStmt,
+				"ON CONFLICT (jid) DO UPDATE SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name",
+				"ON DUPLICATE KEY UPDATE platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name)",
+				1)
+		}
+	}
+
+	_, err := c.db.Exec(insertStmt,
 		device.ID.String(), device.RegistrationID, device.NoiseKey.Priv[:], device.IdentityKey.Priv[:],
 		device.SignedPreKey.Priv[:], device.SignedPreKey.KeyID, device.SignedPreKey.Signature[:],
 		device.AdvSecretKey, device.Account.Details, device.Account.AccountSignature, device.Account.AccountSignatureKey, device.Account.DeviceSignature,
@@ -266,5 +298,21 @@ func (c *Container) DeleteDevice(store *store.Device) error {
 		return ErrDeviceIDMustBeSet
 	}
 	_, err := c.db.Exec(deleteDeviceQuery, store.ID.String())
+	return err
+}
+
+func (c *Container) setVersion(tx *sql.Tx, version int) error {
+	_, err := tx.Exec("DELETE FROM whatsmeow_version")
+	if err != nil {
+		return err
+	}
+
+	// Use proper placeholder based on dialect
+	placeholder := "$1"
+	if c.dialect == "sqlite" || c.dialect == "mysql" {
+		placeholder = "?"
+	}
+
+	_, err = tx.Exec("INSERT INTO whatsmeow_version (version) VALUES ("+placeholder+")", version)
 	return err
 }

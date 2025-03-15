@@ -357,14 +357,18 @@ func (s *SQLStore) putAppStateMutationMACs(tx execable, name string, version uin
 	values[1] = name
 	values[2] = version
 	placeholderSyntax := "($1, $2, $3, $%d, $%d)"
-	if s.dialect == "sqlite3" {
-		placeholderSyntax = "(?1, ?2, ?3, ?%d, ?%d)"
+	if s.dialect == "sqlite3" || s.dialect == "mysql" {
+		placeholderSyntax = "(?, ?, ?, ?, ?)"
 	}
 	for i, mutation := range mutations {
 		baseIndex := 3 + i*2
 		values[baseIndex] = mutation.IndexMAC
 		values[baseIndex+1] = mutation.ValueMAC
-		queryParts[i] = fmt.Sprintf(placeholderSyntax, baseIndex+1, baseIndex+2)
+		if s.dialect == "sqlite3" || s.dialect == "mysql" {
+			queryParts[i] = placeholderSyntax
+		} else {
+			queryParts[i] = fmt.Sprintf(placeholderSyntax, baseIndex+1, baseIndex+2)
+		}
 	}
 	_, err := tx.Exec(putAppStateMutationMACsQuery+strings.Join(queryParts, ","), values...)
 	return err
@@ -415,7 +419,11 @@ func (s *SQLStore) DeleteAppStateMutationMACs(name string, indexMACs [][]byte) (
 		queryParts := make([]string, len(indexMACs))
 		for i, item := range indexMACs {
 			args[2+i] = item
-			queryParts[i] = fmt.Sprintf("$%d", i+3)
+			if s.dialect == "mysql" || s.dialect == "sqlite" {
+				queryParts[i] = "?"
+			} else {
+				queryParts[i] = fmt.Sprintf("$%d", i+3)
+			}
 		}
 		_, err = s.db.Exec(deleteAppStateMutationMACsQueryGeneric+"("+strings.Join(queryParts, ",")+")", args...)
 	}
@@ -525,8 +533,8 @@ func (s *SQLStore) putContactNamesBatch(tx execable, contacts []store.ContactEnt
 	queryParts := make([]string, 0, len(contacts))
 	values[0] = s.JID
 	placeholderSyntax := "($1, $%d, $%d, $%d)"
-	if s.dialect == "sqlite3" {
-		placeholderSyntax = "(?1, ?%d, ?%d, ?%d)"
+	if s.dialect == "sqlite3" || s.dialect == "mysql" {
+		placeholderSyntax = "(?, ?, ?, ?)"
 	}
 	i := 0
 	handledContacts := make(map[types.JID]struct{}, len(contacts))
@@ -544,7 +552,11 @@ func (s *SQLStore) putContactNamesBatch(tx execable, contacts []store.ContactEnt
 		handledContacts[contact.JID] = struct{}{}
 		baseIndex := i*3 + 1
 		values = append(values, contact.JID.String(), contact.FirstName, contact.FullName)
-		queryParts = append(queryParts, fmt.Sprintf(placeholderSyntax, baseIndex+1, baseIndex+2, baseIndex+3))
+		if s.dialect == "sqlite3" || s.dialect == "mysql" {
+			queryParts = append(queryParts, placeholderSyntax)
+		} else {
+			queryParts = append(queryParts, fmt.Sprintf(placeholderSyntax, baseIndex+1, baseIndex+2, baseIndex+3))
+		}
 		i++
 	}
 	_, err := tx.Exec(fmt.Sprintf(putManyContactNamesQuery, strings.Join(queryParts, ",")), values...)
