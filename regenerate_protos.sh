@@ -65,13 +65,13 @@ echo "Applying fixes to all generated files..."
 for pb_file in $(find ./proto -name "*.pb.go" -type f); do
     # Make a backup
     cp "$pb_file" "${pb_file}.bak"
-    
+
     # Fix the slice bounds issue - covering all potential patterns
     sed -i 's/x\[-1\]/x[0]/g' "$pb_file"
     sed -i 's/dv\[-1\]/dv[0]/g' "$pb_file"
     sed -i 's/sv\[-1\]/sv[0]/g' "$pb_file"
     sed -i 's/bv\[-1\]/bv[0]/g' "$pb_file"
-    
+
     echo "Fixed and backed up $pb_file"
 done
 
