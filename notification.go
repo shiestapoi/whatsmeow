@@ -12,12 +12,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/whatsmeow/appstate"
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	"github.com/shiestapoi/whatsmeow/appstate"
+	waBinary "github.com/shiestapoi/whatsmeow/binary"
+	"github.com/shiestapoi/whatsmeow/proto/waE2E"
+	"github.com/shiestapoi/whatsmeow/store"
+	"github.com/shiestapoi/whatsmeow/types"
+	"github.com/shiestapoi/whatsmeow/types/events"
 )
 
 func (cli *Client) handleEncryptNotification(node *waBinary.Node) {
