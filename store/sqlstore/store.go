@@ -375,20 +375,35 @@ func (s *SQLStore) UploadedPreKeyCount() (count int, err error) {
 }
 
 const (
-	getSenderKeyQuery = `SELECT sender_key FROM whatsmeow_sender_keys WHERE our_jid=$1 AND chat_id=$2 AND sender_id=$3`
-	putSenderKeyQuery = `
+	getSenderKeyQueryGeneric = `SELECT sender_key FROM whatsmeow_sender_keys WHERE our_jid=$1 AND chat_id=$2 AND sender_id=$3`
+	getSenderKeyQueryMySQL   = `SELECT sender_key FROM whatsmeow_sender_keys WHERE our_jid=? AND chat_id=? AND sender_id=?`
+	putSenderKeyQuery        = `
 		INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET sender_key=excluded.sender_key
 	`
 )
 
 func (s *SQLStore) PutSenderKey(group, user string, session []byte) error {
+	if s.dialect == "mysql" {
+		// Use a direct MySQL query with proper backtick escaping
+		_, err := s.db.Exec(`
+			INSERT INTO whatsmeow_sender_keys (our_jid, chat_id, sender_id, sender_key) 
+			VALUES (?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE sender_key=VALUES(sender_key)
+		`, s.JID, group, user, session)
+		return err
+	}
 	_, err := s.db.Exec(s.dialectQuery(putSenderKeyQuery), s.JID, group, user, session)
 	return err
 }
 
 func (s *SQLStore) GetSenderKey(group, user string) (key []byte, err error) {
-	err = s.db.QueryRow(s.dialectQuery(getSenderKeyQuery), s.JID, group, user).Scan(&key)
+	if s.dialect == "mysql" {
+		// Use direct MySQL query to avoid any potential dialect conversion issues
+		err = s.db.QueryRow(getSenderKeyQueryMySQL, s.JID, group, user).Scan(&key)
+	} else {
+		err = s.db.QueryRow(s.dialectQuery(getSenderKeyQueryGeneric), s.JID, group, user).Scan(&key)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -409,38 +424,28 @@ const (
 func (s *SQLStore) PutAppStateSyncKey(id []byte, key store.AppStateSyncKey) error {
 	if s.dialect == "mysql" {
 		// Use standard MySQL syntax that works in all versions
-		// Simple logic: Try to insert, if it fails because the key exists, do an update
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
 		}
 
-		// Check if key exists and if our timestamp is newer
-		var exists bool
-		var existingTimestamp int64
-		err = tx.QueryRow("SELECT 1, timestamp FROM whatsmeow_app_state_sync_keys WHERE jid=? AND key_id=?", s.JID, id).Scan(&exists, &existingTimestamp)
+		// Insert or update as necessary
+		_, err = tx.Exec(`
+				INSERT INTO whatsmeow_app_state_sync_keys (jid, key_id, key_data, timestamp, fingerprint)
+				VALUES (?, ?, ?, ?, ?)
+				ON DUPLICATE KEY UPDATE
+					key_data=VALUES(key_data),
+					timestamp=VALUES(timestamp),
+					fingerprint=VALUES(fingerprint)
+			`, s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
 
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err != nil {
 			tx.Rollback()
 			return err
 		}
 
-		if errors.Is(err, sql.ErrNoRows) || key.Timestamp > existingTimestamp {
-			// Insert or update as necessary
-			_, err = tx.Exec(`
-					INSERT INTO whatsmeow_app_state_sync_keys (jid, key_id, key_data, timestamp, fingerprint)
-					VALUES (?, ?, ?, ?, ?)
-					ON DUPLICATE KEY UPDATE
-						key_data=VALUES(key_data),
-						timestamp=VALUES(timestamp),
-						fingerprint=VALUES(fingerprint)
-				`, s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
-
-			if err != nil {
-				tx.Rollback()
-				return err
-			}
-		}
+		// Log the key we're storing to aid in debugging
+		s.log.Debugf("Stored app state key: %X with timestamp %d", id, key.Timestamp)
 
 		return tx.Commit()
 	}
@@ -452,6 +457,33 @@ func (s *SQLStore) PutAppStateSyncKey(id []byte, key store.AppStateSyncKey) erro
 
 func (s *SQLStore) GetAppStateSyncKey(id []byte) (*store.AppStateSyncKey, error) {
 	var key store.AppStateSyncKey
+
+	// Special handling for MySQL - binary key lookup can be problematic
+	if s.dialect == "mysql" {
+		// First try with standard query
+		err := s.db.QueryRow("SELECT key_data, timestamp, fingerprint FROM whatsmeow_app_state_sync_keys WHERE jid=? AND key_id=?",
+			s.JID, id).Scan(&key.Data, &key.Timestamp, &key.Fingerprint)
+
+		if err != nil && errors.Is(err, sql.ErrNoRows) {
+			// Try searching by hex representation as backup
+			hexID := fmt.Sprintf("%X", id)
+			s.log.Debugf("Key %s not found directly, trying hex lookup", hexID)
+
+			err = s.db.QueryRow("SELECT key_data, timestamp, fingerprint FROM whatsmeow_app_state_sync_keys WHERE jid=? AND HEX(key_id)=?",
+				s.JID, hexID).Scan(&key.Data, &key.Timestamp, &key.Fingerprint)
+
+			if errors.Is(err, sql.ErrNoRows) {
+				// Log the exact key we're looking for to help debugging
+				s.log.Warnf("App state key not found: %X", id)
+				return nil, nil
+			}
+			return &key, err
+		}
+
+		return &key, err
+	}
+
+	// Standard path for other databases
 	err := s.db.QueryRow(s.dialectQuery(getAppStateSyncKeyQuery), s.JID, id).Scan(&key.Data, &key.Timestamp, &key.Fingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -850,8 +882,16 @@ func (s *SQLStore) GetAllContacts() (map[types.JID]types.ContactInfo, error) {
 }
 
 const (
-	putChatSettingQuery = `
+	putChatSettingQueryPostgres = `
 		INSERT INTO whatsmeow_chat_settings (our_jid, chat_jid, %[1]s) VALUES ($1, $2, $3)
+		ON CONFLICT (our_jid, chat_jid) DO UPDATE SET %[1]s=excluded.%[1]s
+	`
+	putChatSettingQueryMySQL = `
+		INSERT INTO whatsmeow_chat_settings (our_jid, chat_jid, %[1]s) VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE %[1]s=VALUES(%[1]s)
+	`
+	putChatSettingQuerySQLite = `
+		INSERT INTO whatsmeow_chat_settings (our_jid, chat_jid, %[1]s) VALUES (?, ?, ?)
 		ON CONFLICT (our_jid, chat_jid) DO UPDATE SET %[1]s=excluded.%[1]s
 	`
 	getChatSettingsQuery = `
@@ -864,17 +904,45 @@ func (s *SQLStore) PutMutedUntil(chat types.JID, mutedUntil time.Time) error {
 	if !mutedUntil.IsZero() {
 		val = mutedUntil.Unix()
 	}
-	_, err := s.db.Exec(s.dialectQuery(fmt.Sprintf(putChatSettingQuery, "muted_until")), s.JID, chat, val)
+
+	var query string
+	if s.dialect == "mysql" {
+		query = fmt.Sprintf(putChatSettingQueryMySQL, "muted_until")
+	} else if s.dialect == "sqlite3" {
+		query = fmt.Sprintf(putChatSettingQuerySQLite, "muted_until")
+	} else {
+		query = fmt.Sprintf(putChatSettingQueryPostgres, "muted_until")
+	}
+
+	_, err := s.db.Exec(s.dialectQuery(query), s.JID, chat, val)
 	return err
 }
 
 func (s *SQLStore) PutPinned(chat types.JID, pinned bool) error {
-	_, err := s.db.Exec(s.dialectQuery(fmt.Sprintf(putChatSettingQuery, "pinned")), s.JID, chat, pinned)
+	var query string
+	if s.dialect == "mysql" {
+		query = fmt.Sprintf(putChatSettingQueryMySQL, "pinned")
+	} else if s.dialect == "sqlite3" {
+		query = fmt.Sprintf(putChatSettingQuerySQLite, "pinned")
+	} else {
+		query = fmt.Sprintf(putChatSettingQueryPostgres, "pinned")
+	}
+
+	_, err := s.db.Exec(s.dialectQuery(query), s.JID, chat, pinned)
 	return err
 }
 
 func (s *SQLStore) PutArchived(chat types.JID, archived bool) error {
-	_, err := s.db.Exec(s.dialectQuery(fmt.Sprintf(putChatSettingQuery, "archived")), s.JID, chat, archived)
+	var query string
+	if s.dialect == "mysql" {
+		query = fmt.Sprintf(putChatSettingQueryMySQL, "archived")
+	} else if s.dialect == "sqlite3" {
+		query = fmt.Sprintf(putChatSettingQuerySQLite, "archived")
+	} else {
+		query = fmt.Sprintf(putChatSettingQueryPostgres, "archived")
+	}
+
+	_, err := s.db.Exec(s.dialectQuery(query), s.JID, chat, archived)
 	return err
 }
 
@@ -906,6 +974,55 @@ const (
 )
 
 func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err error) {
+	// Smaller batch size to reduce lock contention
+	const msgSecretBatchSize = 50
+
+	// For large batches, process in smaller chunks
+	if len(inserts) > msgSecretBatchSize {
+		for i := 0; i < len(inserts); i += msgSecretBatchSize {
+			end := i + msgSecretBatchSize
+			if end > len(inserts) {
+				end = len(inserts)
+			}
+
+			// Process this smaller batch with retry logic
+			batchErr := s.putMessageSecretsWithRetry(inserts[i:end])
+			if batchErr != nil {
+				return batchErr
+			}
+		}
+		return nil
+	}
+
+	// For small batches, use retry logic directly
+	return s.putMessageSecretsWithRetry(inserts)
+}
+
+func (s *SQLStore) putMessageSecretsWithRetry(inserts []store.MessageSecretInsert) error {
+	maxRetries := 3
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := s.putMessageSecretsInternal(inserts)
+
+		// If successful or not a lock timeout error, return immediately
+		if err == nil || (s.dialect == "mysql" && !strings.Contains(err.Error(), "Lock wait timeout exceeded")) {
+			return err
+		}
+
+		// Log the retry attempt
+		s.log.Warnf("Lock timeout storing message secrets (attempt %d/%d), retrying after delay",
+			attempt+1, maxRetries)
+
+		// Wait with progressive backoff before retrying
+		backoffMs := 100 * (attempt + 1)
+		time.Sleep(time.Duration(backoffMs) * time.Millisecond)
+	}
+
+	// If we get here, all retries failed
+	return fmt.Errorf("failed to store message secrets after %d retry attempts", maxRetries)
+}
+
+func (s *SQLStore) putMessageSecretsInternal(inserts []store.MessageSecretInsert) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -937,13 +1054,25 @@ func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err e
 }
 
 func (s *SQLStore) PutMessageSecret(chat, sender types.JID, id types.MessageID, secret []byte) (err error) {
-	// For MySQL we need explicit backticks around the "key" column
+	// For single message secrets, also use retry logic for consistency
 	if s.dialect == "mysql" {
-		query := `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `)
-				 VALUES (?, ?, ?, ?, ?)
-				 ON DUPLICATE KEY UPDATE our_jid=our_jid`
-		_, err = s.db.Exec(query, s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
+		// Try with retries for MySQL
+		for attempt := 0; attempt < 3; attempt++ {
+			query := `INSERT INTO whatsmeow_message_secrets (our_jid, chat_jid, sender_jid, message_id, ` + "`key`" + `)
+					VALUES (?, ?, ?, ?, ?)
+					ON DUPLICATE KEY UPDATE our_jid=our_jid`
+			_, err = s.db.Exec(query, s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
+
+			// If successful or not a lock timeout, break
+			if err == nil || !strings.Contains(err.Error(), "Lock wait timeout exceeded") {
+				break
+			}
+
+			// Wait briefly before retrying
+			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+		}
 	} else {
+		// Standard path for other databases
 		_, err = s.db.Exec(s.dialectQuery(putMsgSecret), s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
 	}
 	return

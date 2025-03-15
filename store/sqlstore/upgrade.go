@@ -586,6 +586,27 @@ func upgradeV7(tx *sql.Tx, container *Container) error {
 			}
 		}
 
+		// Try to optimize app_state_sync_keys table which is causing retrieval issues
+		_, err = tx.Exec("ALTER TABLE whatsmeow_app_state_sync_keys ADD INDEX idx_jid_key_id (jid, key_id(32))")
+		if err != nil {
+			// Ignore if index already exists
+			container.log.Warnf("Failed to create index on whatsmeow_app_state_sync_keys: %v", err)
+		}
+
+		// Add index by hex representation to allow for easier lookups
+		_, err = tx.Exec(`CREATE PROCEDURE IF NOT EXISTS create_hex_index()
+			BEGIN
+				DECLARE CONTINUE HANDLER FOR 1060 BEGIN END;  -- Ignore duplicate key error
+				ALTER TABLE whatsmeow_app_state_sync_keys ADD INDEX idx_jid_key_id_hex (jid, (CONCAT(HEX(key_id))));
+			END;`)
+		if err == nil {
+			_, err = tx.Exec("CALL create_hex_index()")
+			if err != nil {
+				container.log.Warnf("Failed to create hex index on app_state_sync_keys: %v", err)
+			}
+			_, _ = tx.Exec("DROP PROCEDURE IF EXISTS create_hex_index")
+		}
+
 		// Re-enable foreign key checks
 		_, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 1")
 		if err != nil {

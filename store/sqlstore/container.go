@@ -250,7 +250,8 @@ func (c *Container) PutDevice(device *store.Device) error {
 									  platform, business_name, push_name, facebook_uuid)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
-		    platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name)
+		    platform=VALUES(platform), business_name=VALUES(business_name), push_name=VALUES(push_name), 
+		    facebook_uuid=VALUES(facebook_uuid)
 		`
 	} else if c.dialect == "sqlite" {
 		query = `
@@ -260,7 +261,8 @@ func (c *Container) PutDevice(device *store.Device) error {
 									  platform, business_name, push_name, facebook_uuid)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (jid) DO UPDATE
-		    SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name
+		    SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name,
+		    facebook_uuid=excluded.facebook_uuid
 		`
 	} else {
 		// PostgreSQL
@@ -271,7 +273,8 @@ func (c *Container) PutDevice(device *store.Device) error {
 									  platform, business_name, push_name, facebook_uuid)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (jid) DO UPDATE
-		    SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name
+		    SET platform=excluded.platform, business_name=excluded.business_name, push_name=excluded.push_name,
+		    facebook_uuid=excluded.facebook_uuid
 		`
 	}
 
