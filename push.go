@@ -12,8 +12,8 @@ import (
 
 	"go.mau.fi/util/random"
 
-	waBinary "go.mau.fi/whatsmeow/binary"
-	"go.mau.fi/whatsmeow/types"
+	waBinary "github.com/shiestapoi/whatsmeow/binary"
+	"github.com/shiestapoi/whatsmeow/types"
 )
 
 type PushConfig interface {

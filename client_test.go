@@ -13,10 +13,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
+	"github.com/shiestapoi/whatsmeow"
+	"github.com/shiestapoi/whatsmeow/store/sqlstore"
+	"github.com/shiestapoi/whatsmeow/types/events"
+	waLog "github.com/shiestapoi/whatsmeow/util/log"
 )
 
 func eventHandler(evt interface{}) {
