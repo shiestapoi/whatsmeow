@@ -69,24 +69,68 @@ const (
 	getIdentityQuery         = `SELECT identity FROM whatsmeow_identity_keys WHERE our_jid=$1 AND their_id=$2`
 )
 
+func (s *SQLStore) dialectQuery(query string) string {
+	if s.dialect == "mysql" || s.dialect == "sqlite3" {
+		// Replace $N with ? for MySQL and SQLite
+		result := query
+		for i := 1; i <= 20; i++ {
+			result = strings.ReplaceAll(result, fmt.Sprintf("$%d", i), "?")
+		}
+
+		// Replace ON CONFLICT syntax with MySQL's equivalent for MySQL
+		if s.dialect == "mysql" {
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_id) DO UPDATE SET",
+				"ON DUPLICATE KEY UPDATE", -1)
+			result = strings.Replace(result,
+				"ON CONFLICT (jid, key_id) DO UPDATE",
+				"ON DUPLICATE KEY UPDATE", -1)
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, chat_jid) DO UPDATE SET",
+				"ON DUPLICATE KEY UPDATE", -1)
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, chat_id, sender_id) DO UPDATE SET",
+				"ON DUPLICATE KEY UPDATE", -1)
+			result = strings.Replace(result,
+				"ON CONFLICT (jid, name) DO UPDATE SET",
+				"ON DUPLICATE KEY UPDATE", -1)
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, their_jid) DO UPDATE SET",
+				"ON DUPLICATE KEY UPDATE", -1)
+			result = strings.Replace(result,
+				"ON CONFLICT (our_jid, chat_jid, sender_jid, message_id) DO NOTHING",
+				"ON DUPLICATE KEY UPDATE our_jid=our_jid", -1)
+
+			// Replace excluded.X with VALUES(X) for MySQL
+			result = strings.ReplaceAll(result, "excluded.", "VALUES(")
+			result = strings.ReplaceAll(result, "=VALUES(", "=VALUES(")
+			result = strings.ReplaceAll(result, ">VALUES(", ">VALUES(")
+			result = strings.Replace(result, "WHERE VALUES(timestamp", "WHERE VALUES(timestamp)", -1)
+		}
+
+		return result
+	}
+	return query
+}
+
 func (s *SQLStore) PutIdentity(address string, key [32]byte) error {
-	_, err := s.db.Exec(putIdentityQuery, s.JID, address, key[:])
+	_, err := s.db.Exec(s.dialectQuery(putIdentityQuery), s.JID, address, key[:])
 	return err
 }
 
 func (s *SQLStore) DeleteAllIdentities(phone string) error {
-	_, err := s.db.Exec(deleteAllIdentitiesQuery, s.JID, phone+":%")
+	_, err := s.db.Exec(s.dialectQuery(deleteAllIdentitiesQuery), s.JID, phone+":%")
 	return err
 }
 
 func (s *SQLStore) DeleteIdentity(address string) error {
-	_, err := s.db.Exec(deleteAllIdentitiesQuery, s.JID, address)
+	_, err := s.db.Exec(s.dialectQuery(deleteAllIdentitiesQuery), s.JID, address)
 	return err
 }
 
 func (s *SQLStore) IsTrustedIdentity(address string, key [32]byte) (bool, error) {
 	var existingIdentity []byte
-	err := s.db.QueryRow(getIdentityQuery, s.JID, address).Scan(&existingIdentity)
+	err := s.db.QueryRow(s.dialectQuery(getIdentityQuery), s.JID, address).Scan(&existingIdentity)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Trust if not known, it'll be saved automatically later
 		return true, nil
@@ -110,7 +154,7 @@ const (
 )
 
 func (s *SQLStore) GetSession(address string) (session []byte, err error) {
-	err = s.db.QueryRow(getSessionQuery, s.JID, address).Scan(&session)
+	err = s.db.QueryRow(s.dialectQuery(getSessionQuery), s.JID, address).Scan(&session)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -118,7 +162,7 @@ func (s *SQLStore) GetSession(address string) (session []byte, err error) {
 }
 
 func (s *SQLStore) HasSession(address string) (has bool, err error) {
-	err = s.db.QueryRow(hasSessionQuery, s.JID, address).Scan(&has)
+	err = s.db.QueryRow(s.dialectQuery(hasSessionQuery), s.JID, address).Scan(&has)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -126,17 +170,17 @@ func (s *SQLStore) HasSession(address string) (has bool, err error) {
 }
 
 func (s *SQLStore) PutSession(address string, session []byte) error {
-	_, err := s.db.Exec(putSessionQuery, s.JID, address, session)
+	_, err := s.db.Exec(s.dialectQuery(putSessionQuery), s.JID, address, session)
 	return err
 }
 
 func (s *SQLStore) DeleteAllSessions(phone string) error {
-	_, err := s.db.Exec(deleteAllSessionsQuery, s.JID, phone+":%")
+	_, err := s.db.Exec(s.dialectQuery(deleteAllSessionsQuery), s.JID, phone+":%")
 	return err
 }
 
 func (s *SQLStore) DeleteSession(address string) error {
-	_, err := s.db.Exec(deleteSessionQuery, s.JID, address)
+	_, err := s.db.Exec(s.dialectQuery(deleteSessionQuery), s.JID, address)
 	return err
 }
 
@@ -152,13 +196,13 @@ const (
 
 func (s *SQLStore) genOnePreKey(id uint32, markUploaded bool) (*keys.PreKey, error) {
 	key := keys.NewPreKey(id)
-	_, err := s.db.Exec(insertPreKeyQuery, s.JID, key.KeyID, key.Priv[:], markUploaded)
+	_, err := s.db.Exec(s.dialectQuery(insertPreKeyQuery), s.JID, key.KeyID, key.Priv[:], markUploaded)
 	return key, err
 }
 
 func (s *SQLStore) getNextPreKeyID() (uint32, error) {
 	var lastKeyID sql.NullInt32
-	err := s.db.QueryRow(getLastPreKeyIDQuery, s.JID).Scan(&lastKeyID)
+	err := s.db.QueryRow(s.dialectQuery(getLastPreKeyIDQuery), s.JID).Scan(&lastKeyID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to query next prekey ID: %w", err)
 	}
@@ -179,7 +223,7 @@ func (s *SQLStore) GetOrGenPreKeys(count uint32) ([]*keys.PreKey, error) {
 	s.preKeyLock.Lock()
 	defer s.preKeyLock.Unlock()
 
-	res, err := s.db.Query(getUnuploadedPreKeysQuery, s.JID, count)
+	res, err := s.db.Query(s.dialectQuery(getUnuploadedPreKeysQuery), s.JID, count)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query existing prekeys: %w", err)
 	}
@@ -232,21 +276,21 @@ func scanPreKey(row scannable) (*keys.PreKey, error) {
 }
 
 func (s *SQLStore) GetPreKey(id uint32) (*keys.PreKey, error) {
-	return scanPreKey(s.db.QueryRow(getPreKeyQuery, s.JID, id))
+	return scanPreKey(s.db.QueryRow(s.dialectQuery(getPreKeyQuery), s.JID, id))
 }
 
 func (s *SQLStore) RemovePreKey(id uint32) error {
-	_, err := s.db.Exec(deletePreKeyQuery, s.JID, id)
+	_, err := s.db.Exec(s.dialectQuery(deletePreKeyQuery), s.JID, id)
 	return err
 }
 
 func (s *SQLStore) MarkPreKeysAsUploaded(upToID uint32) error {
-	_, err := s.db.Exec(markPreKeysAsUploadedQuery, s.JID, upToID)
+	_, err := s.db.Exec(s.dialectQuery(markPreKeysAsUploadedQuery), s.JID, upToID)
 	return err
 }
 
 func (s *SQLStore) UploadedPreKeyCount() (count int, err error) {
-	err = s.db.QueryRow(getUploadedPreKeyCountQuery, s.JID).Scan(&count)
+	err = s.db.QueryRow(s.dialectQuery(getUploadedPreKeyCountQuery), s.JID).Scan(&count)
 	return
 }
 
@@ -259,12 +303,12 @@ const (
 )
 
 func (s *SQLStore) PutSenderKey(group, user string, session []byte) error {
-	_, err := s.db.Exec(putSenderKeyQuery, s.JID, group, user, session)
+	_, err := s.db.Exec(s.dialectQuery(putSenderKeyQuery), s.JID, group, user, session)
 	return err
 }
 
 func (s *SQLStore) GetSenderKey(group, user string) (key []byte, err error) {
-	err = s.db.QueryRow(getSenderKeyQuery, s.JID, group, user).Scan(&key)
+	err = s.db.QueryRow(s.dialectQuery(getSenderKeyQuery), s.JID, group, user).Scan(&key)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -283,13 +327,13 @@ const (
 )
 
 func (s *SQLStore) PutAppStateSyncKey(id []byte, key store.AppStateSyncKey) error {
-	_, err := s.db.Exec(putAppStateSyncKeyQuery, s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
+	_, err := s.db.Exec(s.dialectQuery(putAppStateSyncKeyQuery), s.JID, id, key.Data, key.Timestamp, key.Fingerprint)
 	return err
 }
 
 func (s *SQLStore) GetAppStateSyncKey(id []byte) (*store.AppStateSyncKey, error) {
 	var key store.AppStateSyncKey
-	err := s.db.QueryRow(getAppStateSyncKeyQuery, s.JID, id).Scan(&key.Data, &key.Timestamp, &key.Fingerprint)
+	err := s.db.QueryRow(s.dialectQuery(getAppStateSyncKeyQuery), s.JID, id).Scan(&key.Data, &key.Timestamp, &key.Fingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -298,7 +342,7 @@ func (s *SQLStore) GetAppStateSyncKey(id []byte) (*store.AppStateSyncKey, error)
 
 func (s *SQLStore) GetLatestAppStateSyncKeyID() ([]byte, error) {
 	var keyID []byte
-	err := s.db.QueryRow(getLatestAppStateSyncKeyIDQuery, s.JID).Scan(&keyID)
+	err := s.db.QueryRow(s.dialectQuery(getLatestAppStateSyncKeyIDQuery), s.JID).Scan(&keyID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -319,13 +363,13 @@ const (
 )
 
 func (s *SQLStore) PutAppStateVersion(name string, version uint64, hash [128]byte) error {
-	_, err := s.db.Exec(putAppStateVersionQuery, s.JID, name, version, hash[:])
+	_, err := s.db.Exec(s.dialectQuery(putAppStateVersionQuery), s.JID, name, version, hash[:])
 	return err
 }
 
 func (s *SQLStore) GetAppStateVersion(name string) (version uint64, hash [128]byte, err error) {
 	var uncheckedHash []byte
-	err = s.db.QueryRow(getAppStateVersionQuery, s.JID, name).Scan(&version, &uncheckedHash)
+	err = s.db.QueryRow(s.dialectQuery(getAppStateVersionQuery), s.JID, name).Scan(&version, &uncheckedHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		// version will be 0 and hash will be an empty array, which is the correct initial state
 		err = nil
@@ -342,7 +386,7 @@ func (s *SQLStore) GetAppStateVersion(name string) (version uint64, hash [128]by
 }
 
 func (s *SQLStore) DeleteAppStateVersion(name string) error {
-	_, err := s.db.Exec(deleteAppStateVersionQuery, s.JID, name)
+	_, err := s.db.Exec(s.dialectQuery(deleteAppStateVersionQuery), s.JID, name)
 	return err
 }
 
@@ -370,7 +414,7 @@ func (s *SQLStore) putAppStateMutationMACs(tx execable, name string, version uin
 			queryParts[i] = fmt.Sprintf(placeholderSyntax, baseIndex+1, baseIndex+2)
 		}
 	}
-	_, err := tx.Exec(putAppStateMutationMACsQuery+strings.Join(queryParts, ","), values...)
+	_, err := tx.Exec(s.dialectQuery(putAppStateMutationMACsQuery)+strings.Join(queryParts, ","), values...)
 	return err
 }
 
@@ -411,7 +455,7 @@ func (s *SQLStore) DeleteAppStateMutationMACs(name string, indexMACs [][]byte) (
 		return
 	}
 	if s.dialect == "postgres" && PostgresArrayWrapper != nil {
-		_, err = s.db.Exec(deleteAppStateMutationMACsQueryPostgres, s.JID, name, PostgresArrayWrapper(indexMACs))
+		_, err = s.db.Exec(s.dialectQuery(deleteAppStateMutationMACsQueryPostgres), s.JID, name, PostgresArrayWrapper(indexMACs))
 	} else {
 		args := make([]interface{}, 2+len(indexMACs))
 		args[0] = s.JID
@@ -425,13 +469,13 @@ func (s *SQLStore) DeleteAppStateMutationMACs(name string, indexMACs [][]byte) (
 				queryParts[i] = fmt.Sprintf("$%d", i+3)
 			}
 		}
-		_, err = s.db.Exec(deleteAppStateMutationMACsQueryGeneric+"("+strings.Join(queryParts, ",")+")", args...)
+		_, err = s.db.Exec(s.dialectQuery(deleteAppStateMutationMACsQueryGeneric)+"("+strings.Join(queryParts, ",")+")", args...)
 	}
 	return
 }
 
 func (s *SQLStore) GetAppStateMutationMAC(name string, indexMAC []byte) (valueMAC []byte, err error) {
-	err = s.db.QueryRow(getAppStateMutationMACQuery, s.JID, name, indexMAC).Scan(&valueMAC)
+	err = s.db.QueryRow(s.dialectQuery(getAppStateMutationMACQuery), s.JID, name, indexMAC).Scan(&valueMAC)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -473,7 +517,7 @@ func (s *SQLStore) PutPushName(user types.JID, pushName string) (bool, string, e
 		return false, "", err
 	}
 	if cached.PushName != pushName {
-		_, err = s.db.Exec(putPushNameQuery, s.JID, user, pushName)
+		_, err = s.db.Exec(s.dialectQuery(putPushNameQuery), s.JID, user, pushName)
 		if err != nil {
 			return false, "", err
 		}
@@ -494,7 +538,7 @@ func (s *SQLStore) PutBusinessName(user types.JID, businessName string) (bool, s
 		return false, "", err
 	}
 	if cached.BusinessName != businessName {
-		_, err = s.db.Exec(putBusinessNameQuery, s.JID, user, businessName)
+		_, err = s.db.Exec(s.dialectQuery(putBusinessNameQuery), s.JID, user, businessName)
 		if err != nil {
 			return false, "", err
 		}
@@ -515,7 +559,7 @@ func (s *SQLStore) PutContactName(user types.JID, firstName, fullName string) er
 		return err
 	}
 	if cached.FirstName != firstName || cached.FullName != fullName {
-		_, err = s.db.Exec(putContactNameQuery, s.JID, user, firstName, fullName)
+		_, err = s.db.Exec(s.dialectQuery(putContactNameQuery), s.JID, user, firstName, fullName)
 		if err != nil {
 			return err
 		}
@@ -559,7 +603,7 @@ func (s *SQLStore) putContactNamesBatch(tx execable, contacts []store.ContactEnt
 		}
 		i++
 	}
-	_, err := tx.Exec(fmt.Sprintf(putManyContactNamesQuery, strings.Join(queryParts, ",")), values...)
+	_, err := tx.Exec(s.dialectQuery(fmt.Sprintf(putManyContactNamesQuery, strings.Join(queryParts, ","))), values...)
 	return err
 }
 
@@ -608,7 +652,7 @@ func (s *SQLStore) getContact(user types.JID) (*types.ContactInfo, error) {
 	}
 
 	var first, full, push, business sql.NullString
-	err := s.db.QueryRow(getContactQuery, s.JID, user).Scan(&first, &full, &push, &business)
+	err := s.db.QueryRow(s.dialectQuery(getContactQuery), s.JID, user).Scan(&first, &full, &push, &business)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -636,7 +680,7 @@ func (s *SQLStore) GetContact(user types.JID) (types.ContactInfo, error) {
 func (s *SQLStore) GetAllContacts() (map[types.JID]types.ContactInfo, error) {
 	s.contactCacheLock.Lock()
 	defer s.contactCacheLock.Unlock()
-	rows, err := s.db.Query(getAllContactsQuery, s.JID)
+	rows, err := s.db.Query(s.dialectQuery(getAllContactsQuery), s.JID)
 	if err != nil {
 		return nil, err
 	}
@@ -676,23 +720,23 @@ func (s *SQLStore) PutMutedUntil(chat types.JID, mutedUntil time.Time) error {
 	if !mutedUntil.IsZero() {
 		val = mutedUntil.Unix()
 	}
-	_, err := s.db.Exec(fmt.Sprintf(putChatSettingQuery, "muted_until"), s.JID, chat, val)
+	_, err := s.db.Exec(s.dialectQuery(fmt.Sprintf(putChatSettingQuery, "muted_until")), s.JID, chat, val)
 	return err
 }
 
 func (s *SQLStore) PutPinned(chat types.JID, pinned bool) error {
-	_, err := s.db.Exec(fmt.Sprintf(putChatSettingQuery, "pinned"), s.JID, chat, pinned)
+	_, err := s.db.Exec(s.dialectQuery(fmt.Sprintf(putChatSettingQuery, "pinned")), s.JID, chat, pinned)
 	return err
 }
 
 func (s *SQLStore) PutArchived(chat types.JID, archived bool) error {
-	_, err := s.db.Exec(fmt.Sprintf(putChatSettingQuery, "archived"), s.JID, chat, archived)
+	_, err := s.db.Exec(s.dialectQuery(fmt.Sprintf(putChatSettingQuery, "archived")), s.JID, chat, archived)
 	return err
 }
 
 func (s *SQLStore) GetChatSettings(chat types.JID) (settings types.LocalChatSettings, err error) {
 	var mutedUntil int64
-	err = s.db.QueryRow(getChatSettingsQuery, s.JID, chat).Scan(&mutedUntil, &settings.Pinned, &settings.Archived)
+	err = s.db.QueryRow(s.dialectQuery(getChatSettingsQuery), s.JID, chat).Scan(&mutedUntil, &settings.Pinned, &settings.Archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	} else if err != nil {
@@ -723,7 +767,7 @@ func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err e
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	for _, insert := range inserts {
-		_, err = tx.Exec(putMsgSecret, s.JID, insert.Chat.ToNonAD(), insert.Sender.ToNonAD(), insert.ID, insert.Secret)
+		_, err = tx.Exec(s.dialectQuery(putMsgSecret), s.JID, insert.Chat.ToNonAD(), insert.Sender.ToNonAD(), insert.ID, insert.Secret)
 	}
 	err = tx.Commit()
 	if err != nil {
@@ -733,12 +777,12 @@ func (s *SQLStore) PutMessageSecrets(inserts []store.MessageSecretInsert) (err e
 }
 
 func (s *SQLStore) PutMessageSecret(chat, sender types.JID, id types.MessageID, secret []byte) (err error) {
-	_, err = s.db.Exec(putMsgSecret, s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
+	_, err = s.db.Exec(s.dialectQuery(putMsgSecret), s.JID, chat.ToNonAD(), sender.ToNonAD(), id, secret)
 	return
 }
 
 func (s *SQLStore) GetMessageSecret(chat, sender types.JID, id types.MessageID) (secret []byte, err error) {
-	err = s.db.QueryRow(getMsgSecret, s.JID, chat.ToNonAD(), sender.ToNonAD(), id).Scan(&secret)
+	err = s.db.QueryRow(s.dialectQuery(getMsgSecret), s.JID, chat.ToNonAD(), sender.ToNonAD(), id).Scan(&secret)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = nil
 	}
@@ -765,7 +809,7 @@ func (s *SQLStore) PutPrivacyTokens(tokens ...store.PrivacyToken) error {
 		placeholders[i] = fmt.Sprintf("($1, $%d, $%d, $%d)", i*3+2, i*3+3, i*3+4)
 	}
 	query := strings.ReplaceAll(putPrivacyTokens, "($1, $2, $3, $4)", strings.Join(placeholders, ","))
-	_, err := s.db.Exec(query, args...)
+	_, err := s.db.Exec(s.dialectQuery(query), args...)
 	return err
 }
 
@@ -773,7 +817,7 @@ func (s *SQLStore) GetPrivacyToken(user types.JID) (*store.PrivacyToken, error) 
 	var token store.PrivacyToken
 	token.User = user.ToNonAD()
 	var ts int64
-	err := s.db.QueryRow(getPrivacyToken, s.JID, token.User).Scan(&token.Token, &ts)
+	err := s.db.QueryRow(s.dialectQuery(getPrivacyToken), s.JID, token.User).Scan(&token.Token, &ts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	} else if err != nil {
