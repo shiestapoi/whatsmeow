@@ -301,18 +301,4 @@ func (c *Container) DeleteDevice(store *store.Device) error {
 	return err
 }
 
-func (c *Container) setVersion(tx *sql.Tx, version int) error {
-	_, err := tx.Exec("DELETE FROM whatsmeow_version")
-	if err != nil {
-		return err
-	}
-
-	// Use proper placeholder based on dialect
-	placeholder := "$1"
-	if c.dialect == "sqlite" || c.dialect == "mysql" {
-		placeholder = "?"
-	}
-
-	_, err = tx.Exec("INSERT INTO whatsmeow_version (version) VALUES ("+placeholder+")", version)
-	return err
-}
+// Remove duplicate setVersion method to avoid conflict with the one in upgrade.go
